@@ -26,6 +26,7 @@ from urllib.parse import urlparse, parse_qs, unquote_plus
 try:
     import pymongo
     from pymongo import MongoClient
+    from pymongo.read_preferences import ReadPreference
     from pymongo.errors import (
         ConnectionFailure,
         OperationFailure,
@@ -166,6 +167,9 @@ class MongoConnectionManager:
                 kwargs["tlsAllowInvalidHostnames"] = True
         if direct_connection:
             kwargs["directConnection"] = True
+        else:
+            # Prefer primary, but allow secondary reading if primary is down
+            kwargs["read_preference"] = ReadPreference.PRIMARY_PREFERRED
         return kwargs
 
     def connect(self, direct_connection=False):
@@ -246,10 +250,15 @@ class TopologyDetector:
     def detect(client):
         """Detect topology type. Returns (topology_type, info_dict)."""
         try:
-            hello = client.admin.command("hello")
+            # Check topology
+            # Use 'hello' or 'isMaster' to get node status
+            # Use PrimaryPreferred to ensure we can read from Secondary if Primary is down
+            admin = client.get_database("admin", read_preference=ReadPreference.PRIMARY_PREFERRED)
+            hello = admin.command("hello")
         except OperationFailure:
             # Fallback for older MongoDB
-            hello = client.admin.command("isMaster")
+            admin = client.get_database("admin", read_preference=ReadPreference.PRIMARY_PREFERRED)
+            hello = admin.command("isMaster")
 
         info = {
             "hello": hello,
@@ -293,8 +302,12 @@ class AvailabilityChecker:
             client = self.conn_manager.connect()
             topology, info = TopologyDetector.detect(client)
         except (ConnectionFailure, ServerSelectionTimeoutError, ConfigurationError) as e:
-            self.output.add_message(NAGIOS_CRITICAL,
-                                    f"Cannot connect to MongoDB: {e}")
+            msg = f"Cannot connect to MongoDB: {e}"
+            # Enhance error message for Quorum Loss scenarios
+            if "No replica set members match selector" in str(e) and "Primary" in str(e):
+                msg += " - Quorum Lost / No Primary available"
+            
+            self.output.add_message(NAGIOS_CRITICAL, msg)
             return
         except Exception as e:
             self.output.add_message(NAGIOS_UNKNOWN,

@@ -42,10 +42,18 @@ done
 # Initiate the ReplicaSet
 echo "Running rs.initiate()..."
 mongosh --host "${FIRST_MEMBER}" --eval "
-  rs.initiate({
-    _id: '${RS_NAME}',
-    members: [${MEMBERS_JSON}]
-  });
+  try {
+    rs.initiate({
+      _id: '${RS_NAME}',
+      members: [${MEMBERS_JSON}]
+    });
+  } catch (e) {
+    if (e.code === 23 || e.message.includes('already initialized')) {
+      print('ReplicaSet already initialized.');
+    } else {
+      throw e;
+    }
+  }
 "
 
 # Wait for the RS to elect a primary

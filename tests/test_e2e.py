@@ -32,17 +32,26 @@ import os
 import subprocess
 import sys
 import time
+import sys
+import time
 import pytest
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 # Path to the plugin script
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "check_mongodb.py")
 FAULT_SCRIPT = os.path.join(os.path.dirname(__file__), "fault_injection.sh")
 
-# Connection URIs (using localhost mapped ports)
-SINGLE_URI = "mongodb://localhost:27017/"
-RS_URI = "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=rs0"
-RS_ARBITER_URI = "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=rsArbiter"
-SHARDED_URI = "mongodb://localhost:27017,localhost:27018/"
+# Connection URIs (can be overridden via env vars for Docker-based testing)
+SINGLE_URI = os.environ.get("SINGLE_URI", "mongodb://127.0.0.1:27017/")
+RS_URI = os.environ.get(
+    "RS_URI", 
+    "mongodb://127.0.0.1:27017,127.0.0.1:27018,127.0.0.1:27019/?replicaSet=rs0"
+)
+RS_ARBITER_URI = os.environ.get(
+    "RS_ARBITER_URI",
+    "mongodb://127.0.0.1:27017,127.0.0.1:27018,127.0.0.1:27019/?replicaSet=rsArbiter"
+)
+SHARDED_URI = os.environ.get("SHARDED_URI", "mongodb://127.0.0.1:27017,127.0.0.1:27018/")
 
 # Icinga exit codes
 OK = 0
@@ -209,7 +218,15 @@ class TestReplicaSet:
 
     def test_availability_wrong_rs_name(self):
         """Using wrong RS name should produce CRITICAL."""
-        wrong_uri = "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=wrongRS"
+        # Modify RS_URI to use a wrong replicaSet name
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        
+        u = urlparse(RS_URI)
+        query = parse_qs(u.query)
+        query['replicaSet'] = ['wrongRS']
+        new_query = urlencode(query, doseq=True)
+        wrong_uri = urlunparse((u.scheme, u.netloc, u.path, u.params, new_query, u.fragment))
+
         code, out, _ = run_check("--uri", wrong_uri, "--availability", "--timeout", "5")
         # pymongo may refuse to connect or we detect the mismatch
         assert code in (CRITICAL, UNKNOWN)
