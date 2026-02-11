@@ -224,8 +224,11 @@ python -m pytest tests/test_check_mongodb.py -v
 docker compose -f docker/docker-compose.replicaset.yml up -d
 sleep 30
 
-# Esegui test
-python -m pytest tests/test_e2e.py -v --timeout=120
+# Esegui test (metodo consigliato per evitare problemi DNS)
+./run_e2e.sh -v
+
+# Esegui un singolo test
+./run_e2e.sh -v -k test_availability_quorum_lost
 
 # Cleanup
 docker compose -f docker/docker-compose.replicaset.yml down -v
