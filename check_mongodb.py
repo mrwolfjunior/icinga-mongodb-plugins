@@ -60,13 +60,12 @@ RS_STATES = {
     1: "PRIMARY",
     2: "SECONDARY",
     3: "RECOVERING",
-    4: "STARTUP2",
-    5: "UNKNOWN",
-    6: "ARBITER",
-    7: "DOWN",
-    8: "ROLLBACK",
-    9: "REMOVED",
-    10: "RS_GHOST",
+    5: "STARTUP2",
+    6: "UNKNOWN",
+    7: "ARBITER",
+    8: "DOWN",
+    9: "ROLLBACK",
+    10: "REMOVED",
 }
 
 
@@ -391,8 +390,13 @@ class AvailabilityChecker:
             # Default: all members vote unless explicitly set to 0
             # We count from rsStatus members
             voting_members += 1
-            if member.get("health", 0) == 1 and member.get("state", 7) in (1, 2, 6, 7):
-                if member.get("state", 7) in (1, 2, 6):  # PRIMARY, SECONDARY, ARBITER
+            if member.get("health", 0) == 1:
+                # Count healthy voting members (Primary, Secondary, Arbiter, Recovering, Startup2)
+                # 1=Primary, 2=Secondary, 7=Arbiter usually vote.
+                # 3=Recovering, 5=Startup2 can also vote but might not be "healthy" for ops.
+                # For Quorum check, we strictly want to know if we can elect.
+                # We count Primary (1), Secondary (2), Arbiter (7) as healthy voters.
+                if member.get("state") in (1, 2, 7):
                     healthy_voting += 1
 
         majority = (voting_members // 2) + 1
@@ -407,7 +411,7 @@ class AvailabilityChecker:
         for host, port in uri_hosts:
             node_name = f"{host}:{port}"
             indirect_info = indirect_members.get(node_name, None)
-            is_arbiter = (indirect_info and indirect_info.get("state") == 6) if indirect_info else False
+            is_arbiter = (indirect_info and indirect_info.get("state") == 7) if indirect_info else False
 
             # Direct connectivity check
             direct_ok = False
@@ -426,7 +430,7 @@ class AvailabilityChecker:
                     indirect_state = indirect_info.get("state", -1)
                     indirect_health = indirect_info.get("health", 0)
 
-                    if indirect_health == 1 and indirect_state in (1, 2, 6):
+                    if indirect_health == 1 and indirect_state in (1, 2, 7):
                         # Both direct and indirect say OK
                         nodes_ok += 1
                         if self.verbose:

@@ -22,5 +22,7 @@ docker run --rm \
     -w /app \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e RS_URI="mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0" \
+    -e RS_ARBITER_URI="mongodb://mongo-data1:27017,mongo-data2:27017,mongo-arbiter:27017/?replicaSet=rsArbiter" \
+    -e SHARDED_URI="mongodb://mongos1:27017,mongos2:27017/" \
     python:3.9-slim \
     bash -c "apt-get update >/dev/null && apt-get install -y docker.io >/dev/null && pip install -q pymongo pytest && python -m pytest tests/test_e2e.py $@"
