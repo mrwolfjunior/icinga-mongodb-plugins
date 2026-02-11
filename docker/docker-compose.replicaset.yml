@@ -1,0 +1,83 @@
+services:
+  mongo1:
+    image: mongo:7.0
+    container_name: mongo1
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo1-data:/data/db
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    networks:
+      mongonet:
+        aliases:
+          - mongo1
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo2:
+    image: mongo:7.0
+    container_name: mongo2
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo2-data:/data/db
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    networks:
+      mongonet:
+        aliases:
+          - mongo2
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo3:
+    image: mongo:7.0
+    container_name: mongo3
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo3-data:/data/db
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    networks:
+      mongonet:
+        aliases:
+          - mongo3
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo-init:
+    image: mongo:7.0
+    container_name: mongo-init
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+    volumes:
+      - ./init-replicaset.sh:/init-replicaset.sh:ro
+    entrypoint: [ "bash", "/init-replicaset.sh" ]
+    environment:
+      - RS_NAME=rs0
+      - MEMBERS=mongo1:27017,mongo2:27017,mongo3:27017
+    networks:
+      - mongonet
+
+volumes:
+  mongo1-data:
+  mongo2-data:
+  mongo3-data:
+
+
+networks:
+  mongonet:
+    driver: bridge

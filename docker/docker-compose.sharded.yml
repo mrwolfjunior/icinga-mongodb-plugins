@@ -1,0 +1,306 @@
+services:
+  # --- Config Server ReplicaSet ---
+  config1:
+    image: mongo:7.0
+    container_name: config1
+    ports:
+      - "27100:27017"
+    command: mongod --configsvr --replSet configRS --bind_ip_all --port 27017
+    volumes:
+      - config1-data:/data/configdb
+    networks:
+      mongonet:
+        aliases:
+          - config1
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  config2:
+    image: mongo:7.0
+    container_name: config2
+    ports:
+      - "27101:27017"
+    command: mongod --configsvr --replSet configRS --bind_ip_all --port 27017
+    volumes:
+      - config2-data:/data/configdb
+    networks:
+      mongonet:
+        aliases:
+          - config2
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  config3:
+    image: mongo:7.0
+    container_name: config3
+    ports:
+      - "27102:27017"
+    command: mongod --configsvr --replSet configRS --bind_ip_all --port 27017
+    volumes:
+      - config3-data:/data/configdb
+    networks:
+      mongonet:
+        aliases:
+          - config3
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Shard 1 ReplicaSet ---
+  shard1a:
+    image: mongo:7.0
+    container_name: shard1a
+    ports:
+      - "27201:27017"
+    command: mongod --shardsvr --replSet shard1RS --bind_ip_all --port 27017
+    volumes:
+      - shard1a-data:/data/db
+    networks:
+      mongonet:
+        aliases:
+          - shard1a
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  shard1b:
+    image: mongo:7.0
+    container_name: shard1b
+    ports:
+      - "27202:27017"
+    command: mongod --shardsvr --replSet shard1RS --bind_ip_all --port 27017
+    volumes:
+      - shard1b-data:/data/db
+    networks:
+      mongonet:
+        aliases:
+          - shard1b
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  shard1c:
+    image: mongo:7.0
+    container_name: shard1c
+    ports:
+      - "27203:27017"
+    command: mongod --shardsvr --replSet shard1RS --bind_ip_all --port 27017
+    volumes:
+      - shard1c-data:/data/db
+    networks:
+      mongonet:
+        aliases:
+          - shard1c
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Shard 2 ReplicaSet ---
+  shard2a:
+    image: mongo:7.0
+    container_name: shard2a
+    ports:
+      - "27301:27017"
+    command: mongod --shardsvr --replSet shard2RS --bind_ip_all --port 27017
+    volumes:
+      - shard2a-data:/data/db
+    networks:
+      mongonet:
+        aliases:
+          - shard2a
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  shard2b:
+    image: mongo:7.0
+    container_name: shard2b
+    ports:
+      - "27302:27017"
+    command: mongod --shardsvr --replSet shard2RS --bind_ip_all --port 27017
+    volumes:
+      - shard2b-data:/data/db
+    networks:
+      mongonet:
+        aliases:
+          - shard2b
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  shard2c:
+    image: mongo:7.0
+    container_name: shard2c
+    ports:
+      - "27303:27017"
+    command: mongod --shardsvr --replSet shard2RS --bind_ip_all --port 27017
+    volumes:
+      - shard2c-data:/data/db
+    networks:
+      mongonet:
+        aliases:
+          - shard2c
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Mongos ---
+  mongos1:
+    image: mongo:7.0
+    container_name: mongos1
+    ports:
+      - "27017:27017"
+    command: mongos --configdb configRS/config1:27017,config2:27017,config3:27017 --bind_ip_all --port 27017
+    depends_on:
+      config1:
+        condition: service_healthy
+      config2:
+        condition: service_healthy
+      config3:
+        condition: service_healthy
+    networks:
+      mongonet:
+        aliases:
+          - mongos1
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongos2:
+    image: mongo:7.0
+    container_name: mongos2
+    ports:
+      - "27018:27017"
+    command: mongos --configdb configRS/config1:27017,config2:27017,config3:27017 --bind_ip_all --port 27017
+    depends_on:
+      config1:
+        condition: service_healthy
+      config2:
+        condition: service_healthy
+      config3:
+        condition: service_healthy
+    networks:
+      mongonet:
+        aliases:
+          - mongos2
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- Initializer ---
+  sharded-init:
+    image: mongo:7.0
+    container_name: sharded-init
+    depends_on:
+      config1:
+        condition: service_healthy
+      config2:
+        condition: service_healthy
+      config3:
+        condition: service_healthy
+      shard1a:
+        condition: service_healthy
+      shard1b:
+        condition: service_healthy
+      shard1c:
+        condition: service_healthy
+      shard2a:
+        condition: service_healthy
+      shard2b:
+        condition: service_healthy
+      shard2c:
+        condition: service_healthy
+      mongos1:
+        condition: service_healthy
+    entrypoint: [ "bash", "-c" ]
+    command:
+      - |
+        echo "=== Initializing Config RS ==="
+        mongosh --host config1:27017 --eval '
+          rs.initiate({
+            _id: "configRS",
+            configsvr: true,
+            members: [
+              { _id: 0, host: "config1:27017" },
+              { _id: 1, host: "config2:27017" },
+              { _id: 2, host: "config3:27017" }
+            ]
+          });
+        '
+        sleep 10
+
+        echo "=== Initializing Shard 1 RS ==="
+        mongosh --host shard1a:27017 --eval '
+          rs.initiate({
+            _id: "shard1RS",
+            members: [
+              { _id: 0, host: "shard1a:27017" },
+              { _id: 1, host: "shard1b:27017" },
+              { _id: 2, host: "shard1c:27017" }
+            ]
+          });
+        '
+        sleep 10
+
+        echo "=== Initializing Shard 2 RS ==="
+        mongosh --host shard2a:27017 --eval '
+          rs.initiate({
+            _id: "shard2RS",
+            members: [
+              { _id: 0, host: "shard2a:27017" },
+              { _id: 1, host: "shard2b:27017" },
+              { _id: 2, host: "shard2c:27017" }
+            ]
+          });
+        '
+        sleep 15
+
+        echo "=== Adding shards to cluster ==="
+        mongosh --host mongos1:27017 --eval '
+          sh.addShard("shard1RS/shard1a:27017,shard1b:27017,shard1c:27017");
+          sh.addShard("shard2RS/shard2a:27017,shard2b:27017,shard2c:27017");
+          sh.status();
+        '
+        echo "=== Sharded cluster initialized ==="
+    networks:
+      - mongonet
+
+volumes:
+  config1-data:
+  config2-data:
+  config3-data:
+  shard1a-data:
+  shard1b-data:
+  shard1c-data:
+  shard2a-data:
+  shard2b-data:
+  shard2c-data:
+
+
+networks:
+  mongonet:
+    driver: bridge
