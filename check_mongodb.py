@@ -15,6 +15,7 @@ Exit codes:
 """
 
 import argparse
+import json
 import math
 import sys
 import time
@@ -724,20 +725,99 @@ class AvailabilityChecker:
 
 
 # ---------------------------------------------------------------------------
+# ThresholdEngine
+# ---------------------------------------------------------------------------
+
+class ThresholdEngine:
+    """Evaluate metrics against user-defined thresholds.
+
+    Accepts a dict of thresholds in the format:
+        {
+            "metric_key": {"warning": <float>, "critical": <float>, "mode": "above"|"below"},
+            ...
+        }
+
+    Mode 'above' (default): alert when value >= threshold.
+    Mode 'below': alert when value <= threshold (e.g. oplog window, tickets).
+    """
+
+    def __init__(self, thresholds_dict=None):
+        self.thresholds = thresholds_dict or {}
+
+    @classmethod
+    def from_json(cls, json_str):
+        """Parse a JSON string into a ThresholdEngine."""
+        if not json_str:
+            return cls()
+        try:
+            data = json.loads(json_str)
+            if not isinstance(data, dict):
+                raise ValueError("--thresholds must be a JSON object")
+            return cls(data)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON for --thresholds: {e}")
+
+    def check(self, metric_key, value, output, node_name, unit=""):
+        """Evaluate a metric value against configured thresholds.
+
+        Returns True if an alert was raised, False otherwise.
+        """
+        if metric_key not in self.thresholds:
+            return False
+
+        cfg = self.thresholds[metric_key]
+        warn = cfg.get("warning")
+        crit = cfg.get("critical")
+        mode = cfg.get("mode", "above")
+
+        if mode == "below":
+            if crit is not None and value <= crit:
+                output.add_message(
+                    NAGIOS_CRITICAL,
+                    f"Node {node_name}: {metric_key} {value:.1f}{unit} "
+                    f"<= {crit}{unit}"
+                )
+                return True
+            if warn is not None and value <= warn:
+                output.add_message(
+                    NAGIOS_WARNING,
+                    f"Node {node_name}: {metric_key} {value:.1f}{unit} "
+                    f"<= {warn}{unit}"
+                )
+                return True
+        else:  # above
+            if crit is not None and value >= crit:
+                output.add_message(
+                    NAGIOS_CRITICAL,
+                    f"Node {node_name}: {metric_key} {value:.1f}{unit} "
+                    f">= {crit}{unit}"
+                )
+                return True
+            if warn is not None and value >= warn:
+                output.add_message(
+                    NAGIOS_WARNING,
+                    f"Node {node_name}: {metric_key} {value:.1f}{unit} "
+                    f">= {warn}{unit}"
+                )
+                return True
+        return False
+
+    def has(self, metric_key):
+        """Check if a threshold is configured for a metric."""
+        return metric_key in self.thresholds
+
+
+# ---------------------------------------------------------------------------
 # MetricsChecker
 # ---------------------------------------------------------------------------
 
 class MetricsChecker:
     """Extracts performance metrics from each MongoDB node."""
 
-    def __init__(self, conn_manager, output, warning=None, critical=None,
-                 oplog_warning=None, oplog_critical=None, verbose=False):
+    def __init__(self, conn_manager, output, thresholds=None, verbose=False):
         self.conn_manager = conn_manager
         self.output = output
-        self.warning = warning
-        self.critical = critical
-        self.oplog_warning = oplog_warning
-        self.oplog_critical = oplog_critical
+        self.thresholds = thresholds or ThresholdEngine()
         self.verbose = verbose
 
     def check(self):
@@ -775,6 +855,7 @@ class MetricsChecker:
         """Collect serverStatus metrics from a single node."""
         server_status = client.admin.command("serverStatus")
         safe_name = node_name.replace(".", "_").replace(":", "_")
+        te = self.thresholds
 
         # --- Connections ---
         connections = server_status.get("connections", {})
@@ -791,20 +872,7 @@ class MetricsChecker:
         self.output.add_perfdata(f"{safe_name}_conn_usage_pct", f"{conn_usage_pct:.1f}", "%")
         self.output.add_perfdata(f"{safe_name}_conn_total_created", conn_total_created, "c")
 
-        # Check connection usage thresholds
-        if self.warning and self.critical:
-            warn_val = float(self.warning)
-            crit_val = float(self.critical)
-            if conn_usage_pct >= crit_val:
-                self.output.add_message(
-                    NAGIOS_CRITICAL,
-                    f"Node {node_name}: connection usage {conn_usage_pct:.1f}% >= {crit_val}%"
-                )
-            elif conn_usage_pct >= warn_val:
-                self.output.add_message(
-                    NAGIOS_WARNING,
-                    f"Node {node_name}: connection usage {conn_usage_pct:.1f}% >= {warn_val}%"
-                )
+        te.check("conn_usage_pct", conn_usage_pct, self.output, node_name, "%")
 
         # --- Opcounters ---
         opcounters = server_status.get("opcounters", {})
@@ -821,6 +889,8 @@ class MetricsChecker:
         self.output.add_perfdata(f"{safe_name}_queue_readers", queue_readers)
         self.output.add_perfdata(f"{safe_name}_queue_writers", queue_writers)
         self.output.add_perfdata(f"{safe_name}_queue_total", queue_total)
+
+        te.check("queue_total", queue_total, self.output, node_name)
 
         # --- WiredTiger Cache ---
         wt = server_status.get("wiredTiger", {})
@@ -840,6 +910,34 @@ class MetricsChecker:
             self.output.add_perfdata(f"{safe_name}_wt_cache_read", cache_read, "B")
             self.output.add_perfdata(f"{safe_name}_wt_cache_written", cache_written, "B")
 
+            # Cache eviction metrics
+            evict_modified = cache.get("modified pages evicted", 0)
+            evict_unmodified = cache.get("unmodified pages evicted", 0)
+            pages_read = cache.get("pages read into cache", 0)
+            pages_written = cache.get("pages written from cache", 0)
+            self.output.add_perfdata(f"{safe_name}_wt_evict_modified", evict_modified, "c")
+            self.output.add_perfdata(f"{safe_name}_wt_evict_unmodified", evict_unmodified, "c")
+            self.output.add_perfdata(f"{safe_name}_wt_pages_read", pages_read, "c")
+            self.output.add_perfdata(f"{safe_name}_wt_pages_written", pages_written, "c")
+
+            te.check("cache_usage_pct", cache_usage_pct, self.output, node_name, "%")
+
+            # --- WiredTiger Tickets (concurrency) ---
+            ct = wt.get("concurrentTransactions", {})
+            for rw in ("read", "write"):
+                rw_data = ct.get(rw, {})
+                tk_available = rw_data.get("available", 0)
+                tk_out = rw_data.get("out", 0)
+                tk_total = rw_data.get("totalTickets", 0)
+                tk_usage_pct = (tk_out / tk_total * 100) if tk_total > 0 else 0
+
+                self.output.add_perfdata(f"{safe_name}_tickets_{rw}_available", tk_available)
+                self.output.add_perfdata(f"{safe_name}_tickets_{rw}_out", tk_out)
+                self.output.add_perfdata(f"{safe_name}_tickets_{rw}_total", tk_total)
+                self.output.add_perfdata(f"{safe_name}_tickets_{rw}_usage_pct", f"{tk_usage_pct:.1f}", "%")
+
+                te.check(f"tickets_{rw}_pct", tk_usage_pct, self.output, node_name, "%")
+
         # --- Replication Lag (if replicaset member) ---
         try:
             rs_status = client.admin.command("replSetGetStatus")
@@ -853,19 +951,7 @@ class MetricsChecker:
             if primary_optime and my_optime and primary_optime != my_optime:
                 lag_seconds = abs((primary_optime - my_optime).total_seconds())
                 self.output.add_perfdata(f"{safe_name}_repl_lag", f"{lag_seconds:.1f}", "s")
-                if self.warning and self.critical:
-                    warn_val = float(self.warning)
-                    crit_val = float(self.critical)
-                    if lag_seconds >= crit_val:
-                        self.output.add_message(
-                            NAGIOS_CRITICAL,
-                            f"Node {node_name}: replication lag {lag_seconds:.1f}s >= {crit_val}s"
-                        )
-                    elif lag_seconds >= warn_val:
-                        self.output.add_message(
-                            NAGIOS_WARNING,
-                            f"Node {node_name}: replication lag {lag_seconds:.1f}s >= {warn_val}s"
-                        )
+                te.check("repl_lag", lag_seconds, self.output, node_name, "s")
             elif primary_optime and my_optime:
                 self.output.add_perfdata(f"{safe_name}_repl_lag", "0", "s")
         except OperationFailure:
@@ -889,20 +975,7 @@ class MetricsChecker:
                 self.output.add_perfdata(
                     f"{safe_name}_oplog_window", f"{oplog_window_hours:.1f}", "h"
                 )
-
-                # Check oplog window thresholds (inverted: below threshold = bad)
-                if self.oplog_critical and oplog_window_hours <= self.oplog_critical:
-                    self.output.add_message(
-                        NAGIOS_CRITICAL,
-                        f"Node {node_name}: oplog window {oplog_window_hours:.1f}h "
-                        f"<= {self.oplog_critical}h — secondaries risk needing full resync"
-                    )
-                elif self.oplog_warning and oplog_window_hours <= self.oplog_warning:
-                    self.output.add_message(
-                        NAGIOS_WARNING,
-                        f"Node {node_name}: oplog window {oplog_window_hours:.1f}h "
-                        f"<= {self.oplog_warning}h — oplog shrinking"
-                    )
+                te.check("oplog_window", oplog_window_hours, self.output, node_name, "h")
         except Exception:
             # Not a replicaset member or oplog not available
             pass
@@ -934,6 +1007,19 @@ class MetricsChecker:
         for op in ("inserted", "updated", "deleted", "returned"):
             self.output.add_perfdata(f"{safe_name}_doc_{op}", document.get(op, 0), "c")
 
+        # --- Cursors ---
+        cursor_data = metrics_data.get("cursor", {})
+        cursor_open = cursor_data.get("open", {})
+        cursor_open_total = cursor_open.get("total", 0)
+        cursor_open_no_timeout = cursor_open.get("noTimeout", 0)
+        cursor_timed_out = cursor_data.get("timedOut", 0)
+        self.output.add_perfdata(f"{safe_name}_cursor_open", cursor_open_total)
+        self.output.add_perfdata(f"{safe_name}_cursor_open_no_timeout", cursor_open_no_timeout)
+        self.output.add_perfdata(f"{safe_name}_cursor_timed_out", cursor_timed_out, "c")
+
+        te.check("cursor_open", cursor_open_total, self.output, node_name)
+        te.check("cursor_timed_out", cursor_timed_out, self.output, node_name)
+
         # --- Page Faults ---
         extra_info = server_status.get("extra_info", {})
         self.output.add_perfdata(f"{safe_name}_page_faults",
@@ -943,6 +1029,23 @@ class MetricsChecker:
         active_clients = global_lock.get("activeClients", {})
         self.output.add_perfdata(f"{safe_name}_active_readers", active_clients.get("readers", 0))
         self.output.add_perfdata(f"{safe_name}_active_writers", active_clients.get("writers", 0))
+
+        # --- Assertions ---
+        asserts = server_status.get("asserts", {})
+        for atype in ("regular", "warning", "msg", "user", "rollovers"):
+            self.output.add_perfdata(f"{safe_name}_asserts_{atype}", asserts.get(atype, 0), "c")
+
+        te.check("assertions_regular", asserts.get("regular", 0), self.output, node_name)
+        te.check("assertions_warning", asserts.get("warning", 0), self.output, node_name)
+
+        # --- Transactions (MongoDB 4.0+) ---
+        txn = server_status.get("transactions", {})
+        if txn:
+            self.output.add_perfdata(f"{safe_name}_txn_current_active", txn.get("currentActive", 0))
+            self.output.add_perfdata(f"{safe_name}_txn_current_open", txn.get("currentOpen", 0))
+            self.output.add_perfdata(f"{safe_name}_txn_total_started", txn.get("totalStarted", 0), "c")
+            self.output.add_perfdata(f"{safe_name}_txn_total_committed", txn.get("totalCommitted", 0), "c")
+            self.output.add_perfdata(f"{safe_name}_txn_total_aborted", txn.get("totalAborted", 0), "c")
 
         # --- Database Stats (aggregated) ---
         try:
@@ -996,12 +1099,18 @@ class MetricsChecker:
 class FilesystemChecker:
     """Checks filesystem usage on MongoDB nodes using dbStats."""
 
-    def __init__(self, conn_manager, output, warning=90.0, critical=95.0, verbose=False):
+    def __init__(self, conn_manager, output, thresholds=None, verbose=False):
         self.conn_manager = conn_manager
         self.output = output
-        self.warning = warning
-        self.critical = critical
         self.verbose = verbose
+        # Extract base warning/critical from ThresholdEngine, defaults 85/95
+        if thresholds and thresholds.has("fs_usage_pct"):
+            cfg = thresholds.thresholds["fs_usage_pct"]
+            self.warning = cfg.get("warning", 85.0)
+            self.critical = cfg.get("critical", 95.0)
+        else:
+            self.warning = 85.0
+            self.critical = 95.0
 
     @staticmethod
     def dynamic_threshold(total_bytes, base_threshold_pct):
@@ -1206,16 +1315,12 @@ Exit codes:
                             help="Check filesystem usage with dynamic thresholds")
 
     # Thresholds
-    parser.add_argument("--warning", "-w", type=float, default=None,
-                        help="Warning threshold (meaning depends on check mode)")
-    parser.add_argument("--critical", "-c", type=float, default=None,
-                        help="Critical threshold (meaning depends on check mode)")
-    parser.add_argument("--oplog-warning", type=float, default=None,
-                        help="Warning threshold for oplog window in hours (metrics mode). "
-                             "Alert if oplog window falls BELOW this value.")
-    parser.add_argument("--oplog-critical", type=float, default=None,
-                        help="Critical threshold for oplog window in hours (metrics mode). "
-                             "Alert if oplog window falls BELOW this value.")
+    parser.add_argument("--thresholds", type=str, default=None,
+                        help='JSON thresholds, e.g. '
+                             '\'{"\'conn_usage_pct\': {"warning": 80, "critical": 90}, '
+                             '"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}, '
+                             '"fs_usage_pct": {"warning": 85, "critical": 95}}\''
+                        )
 
     # Additional options
     parser.add_argument("--replicaset", default=None,
@@ -1225,23 +1330,14 @@ Exit codes:
 
     args = parser.parse_args()
 
-    # Validate thresholds for modes that need them
-    if args.filesystem:
-        if args.warning is None:
-            args.warning = 85.0
-        if args.critical is None:
-            args.critical = 95.0
-        if args.warning >= args.critical:
-            parser.error("--warning must be less than --critical for filesystem check")
-
-    if args.metrics:
-        if args.warning is not None and args.critical is not None:
-            if args.warning >= args.critical:
-                parser.error("--warning must be less than --critical")
-        if args.oplog_warning is not None and args.oplog_critical is not None:
-            if args.oplog_warning <= args.oplog_critical:
-                parser.error("--oplog-warning must be greater than --oplog-critical "
-                             "(oplog alerts when window is too SMALL)")
+    # Validate thresholds
+    if args.thresholds:
+        try:
+            data = json.loads(args.thresholds)
+            if not isinstance(data, dict):
+                parser.error("--thresholds must be a JSON object")
+        except json.JSONDecodeError as e:
+            parser.error(f"Invalid JSON for --thresholds: {e}")
 
     # Auto-set auth source for LDAP
     if args.auth_mechanism == "PLAIN" and args.auth_source == "admin":
@@ -1282,23 +1378,33 @@ def main():
             checker.check()
 
         elif args.metrics:
+            # Build ThresholdEngine from --thresholds JSON
+            thresholds_dict = {}
+            if args.thresholds:
+                thresholds_dict = json.loads(args.thresholds)
+
+            te = ThresholdEngine(thresholds_dict)
+
             checker = MetricsChecker(
                 conn_manager=conn_manager,
                 output=output,
-                warning=args.warning,
-                critical=args.critical,
-                oplog_warning=args.oplog_warning,
-                oplog_critical=args.oplog_critical,
+                thresholds=te,
                 verbose=args.verbose,
             )
             checker.check()
 
         elif args.filesystem:
+            # Build ThresholdEngine from --thresholds JSON
+            thresholds_dict = {}
+            if args.thresholds:
+                thresholds_dict = json.loads(args.thresholds)
+
+            te = ThresholdEngine(thresholds_dict)
+
             checker = FilesystemChecker(
                 conn_manager=conn_manager,
                 output=output,
-                warning=args.warning,
-                critical=args.critical,
+                thresholds=te,
                 verbose=args.verbose,
             )
             checker.check()

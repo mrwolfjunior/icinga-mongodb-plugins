@@ -24,6 +24,7 @@ from check_mongodb import (
     AvailabilityChecker,
     MetricsChecker,
     FilesystemChecker,
+    ThresholdEngine,
     NAGIOS_OK,
     NAGIOS_WARNING,
     NAGIOS_CRITICAL,
@@ -542,7 +543,10 @@ class TestMetricsChecker(unittest.TestCase):
         mock_client.admin.command.side_effect = mock_command
         conn_mgr.connect_to_node.return_value = mock_client
 
-        checker = MetricsChecker(conn_mgr, output, warning=80, critical=90)
+        checker = MetricsChecker(
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"conn_usage_pct": {"warning": 80, "critical": 90}})
+        )
         checker.check()
 
         # 50 / (50 + 950) = 5% — well below warning
@@ -563,7 +567,10 @@ class TestMetricsChecker(unittest.TestCase):
         }.get(cmd, {})
         conn_mgr.connect_to_node.return_value = mock_client
 
-        checker = MetricsChecker(conn_mgr, output, warning=80, critical=90)
+        checker = MetricsChecker(
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"conn_usage_pct": {"warning": 80, "critical": 90}})
+        )
         checker.check()
 
         # 850 / 1000 = 85% — above warning (80%), below critical (90%)
@@ -584,7 +591,10 @@ class TestMetricsChecker(unittest.TestCase):
         }.get(cmd, {})
         conn_mgr.connect_to_node.return_value = mock_client
 
-        checker = MetricsChecker(conn_mgr, output, warning=80, critical=90)
+        checker = MetricsChecker(
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"conn_usage_pct": {"warning": 80, "critical": 90}})
+        )
         checker.check()
 
         # 950 / 1000 = 95% — above critical (90%)
@@ -687,7 +697,8 @@ class TestOplogWindowThresholds(unittest.TestCase):
         conn_mgr.connect_to_node.return_value = mock_client
 
         checker = MetricsChecker(
-            conn_mgr, output, oplog_warning=48, oplog_critical=24
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}})
         )
         checker.check()
 
@@ -703,13 +714,13 @@ class TestOplogWindowThresholds(unittest.TestCase):
         conn_mgr.connect_to_node.return_value = mock_client
 
         checker = MetricsChecker(
-            conn_mgr, output, oplog_warning=48, oplog_critical=24
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}})
         )
         checker.check()
 
         assert output.status == NAGIOS_WARNING
-        assert "oplog window" in output.messages[0]
-        assert "oplog shrinking" in output.messages[0]
+        assert "oplog_window" in output.messages[0]
 
     def test_oplog_window_critical(self):
         """12h oplog window with 48h warning / 24h critical → CRITICAL."""
@@ -721,13 +732,13 @@ class TestOplogWindowThresholds(unittest.TestCase):
         conn_mgr.connect_to_node.return_value = mock_client
 
         checker = MetricsChecker(
-            conn_mgr, output, oplog_warning=48, oplog_critical=24
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}})
         )
         checker.check()
 
         assert output.status == NAGIOS_CRITICAL
-        assert "oplog window" in output.messages[0]
-        assert "full resync" in output.messages[0]
+        assert "oplog_window" in output.messages[0]
 
     def test_oplog_window_no_thresholds_always_ok(self):
         """Without oplog thresholds, small window should not trigger alerts."""
@@ -765,7 +776,10 @@ class TestFilesystemChecker(unittest.TestCase):
         }
         conn_mgr.connect_to_node.return_value = mock_client
 
-        checker = FilesystemChecker(conn_mgr, output, warning=85, critical=95)
+        checker = FilesystemChecker(
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"fs_usage_pct": {"warning": 85, "critical": 95}})
+        )
         checker.check()
 
         assert output.status == NAGIOS_OK
@@ -783,7 +797,10 @@ class TestFilesystemChecker(unittest.TestCase):
         }
         conn_mgr.connect_to_node.return_value = mock_client
 
-        checker = FilesystemChecker(conn_mgr, output, warning=85, critical=95)
+        checker = FilesystemChecker(
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"fs_usage_pct": {"warning": 85, "critical": 95}})
+        )
         checker.check()
 
         assert output.status == NAGIOS_WARNING
@@ -801,7 +818,10 @@ class TestFilesystemChecker(unittest.TestCase):
         }
         conn_mgr.connect_to_node.return_value = mock_client
 
-        checker = FilesystemChecker(conn_mgr, output, warning=85, critical=95)
+        checker = FilesystemChecker(
+            conn_mgr, output,
+            thresholds=ThresholdEngine({"fs_usage_pct": {"warning": 85, "critical": 95}})
+        )
         checker.check()
 
         assert output.status == NAGIOS_CRITICAL
@@ -894,13 +914,12 @@ class TestArgumentParsing(unittest.TestCase):
             assert args.metrics is True
             assert args.availability is False
 
-    def test_filesystem_defaults(self):
+    def test_filesystem_mode(self):
         from check_mongodb import parse_arguments
         with patch("sys.argv", ["check_mongodb.py", "--uri", "mongodb://h1:27017/", "--filesystem"]):
             args = parse_arguments()
             assert args.filesystem is True
-            assert args.warning == 85.0
-            assert args.critical == 95.0
+            assert args.thresholds is None  # defaults are in FilesystemChecker
 
     def test_ldap_auto_auth_source(self):
         from check_mongodb import parse_arguments
@@ -920,25 +939,103 @@ class TestArgumentParsing(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 parse_arguments()
 
-    def test_oplog_thresholds(self):
+    def test_thresholds_json_arg(self):
         from check_mongodb import parse_arguments
+        import json
+        thresholds = json.dumps({"conn_usage_pct": {"warning": 80, "critical": 90}})
         with patch("sys.argv", [
             "check_mongodb.py", "--uri", "mongodb://h1:27017/",
-            "--metrics", "--oplog-warning", "48", "--oplog-critical", "24"
+            "--metrics", "--thresholds", thresholds
         ]):
             args = parse_arguments()
-            assert args.oplog_warning == 48.0
-            assert args.oplog_critical == 24.0
+            data = json.loads(args.thresholds)
+            assert "conn_usage_pct" in data
+            assert data["conn_usage_pct"]["warning"] == 80
 
-    def test_oplog_thresholds_invalid_order(self):
-        """--oplog-warning must be > --oplog-critical (inverted logic)."""
+    def test_thresholds_invalid_json(self):
         from check_mongodb import parse_arguments
         with patch("sys.argv", [
             "check_mongodb.py", "--uri", "mongodb://h1:27017/",
-            "--metrics", "--oplog-warning", "10", "--oplog-critical", "24"
+            "--metrics", "--thresholds", "not-json"
         ]):
             with self.assertRaises(SystemExit):
                 parse_arguments()
+
+
+# =====================================================================
+# ThresholdEngine Tests
+# =====================================================================
+
+class TestThresholdEngine(unittest.TestCase):
+    """Test the ThresholdEngine class."""
+
+    def test_check_above_ok(self):
+        te = ThresholdEngine({"conn_usage_pct": {"warning": 80, "critical": 90}})
+        output = IcingaOutput()
+        result = te.check("conn_usage_pct", 50.0, output, "h1:27017", "%")
+        assert result is False
+        assert output.status == NAGIOS_OK
+
+    def test_check_above_warning(self):
+        te = ThresholdEngine({"conn_usage_pct": {"warning": 80, "critical": 90}})
+        output = IcingaOutput()
+        result = te.check("conn_usage_pct", 85.0, output, "h1:27017", "%")
+        assert result is True
+        assert output.status == NAGIOS_WARNING
+
+    def test_check_above_critical(self):
+        te = ThresholdEngine({"conn_usage_pct": {"warning": 80, "critical": 90}})
+        output = IcingaOutput()
+        result = te.check("conn_usage_pct", 95.0, output, "h1:27017", "%")
+        assert result is True
+        assert output.status == NAGIOS_CRITICAL
+
+    def test_check_below_ok(self):
+        te = ThresholdEngine({"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}})
+        output = IcingaOutput()
+        result = te.check("oplog_window", 72.0, output, "h1:27017", "h")
+        assert result is False
+        assert output.status == NAGIOS_OK
+
+    def test_check_below_warning(self):
+        te = ThresholdEngine({"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}})
+        output = IcingaOutput()
+        result = te.check("oplog_window", 36.0, output, "h1:27017", "h")
+        assert result is True
+        assert output.status == NAGIOS_WARNING
+
+    def test_check_below_critical(self):
+        te = ThresholdEngine({"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}})
+        output = IcingaOutput()
+        result = te.check("oplog_window", 12.0, output, "h1:27017", "h")
+        assert result is True
+        assert output.status == NAGIOS_CRITICAL
+
+    def test_no_threshold_no_alert(self):
+        te = ThresholdEngine({})
+        output = IcingaOutput()
+        result = te.check("anything", 999, output, "h1:27017")
+        assert result is False
+
+    def test_tickets_pct_threshold(self):
+        te = ThresholdEngine({"tickets_read_pct": {"warning": 80, "critical": 95}})
+        output = IcingaOutput()
+        result = te.check("tickets_read_pct", 90.0, output, "h1:27017", "%")
+        assert result is True
+        assert output.status == NAGIOS_WARNING
+
+    def test_from_json_valid(self):
+        import json
+        te = ThresholdEngine.from_json(json.dumps({"conn_usage_pct": {"warning": 80, "critical": 90}}))
+        assert te.has("conn_usage_pct")
+
+    def test_from_json_invalid(self):
+        with self.assertRaises(ValueError):
+            ThresholdEngine.from_json("not-json")
+
+    def test_from_json_empty(self):
+        te = ThresholdEngine.from_json(None)
+        assert len(te.thresholds) == 0
 
 
 if __name__ == "__main__":

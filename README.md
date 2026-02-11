@@ -59,33 +59,31 @@ Verifica che tutti i nodi siano raggiungibili e in stato sano.
 
 Connessione DIRETTA nodo per nodo per raccogliere metriche da `serverStatus`.
 
-| Metrica | Soglia applicabile |
+| Metrica | Soglia applicabile via `--thresholds` |
 |---|---|
-| Connection usage % | `--warning` / `--critical` (percentuale) |
-| Replication lag | `--warning` / `--critical` (secondi) |
-| **Oplog window** | `--oplog-warning` / `--oplog-critical` (ore) |
-| Operations/sec | Solo perfdata |
-| WiredTiger cache usage | Solo perfdata |
-| Queue lengths | Solo perfdata |
-| Memory (resident, virtual) | Solo perfdata |
-| Network (bytesIn, bytesOut, requests) | Solo perfdata |
-| Document operations | Solo perfdata |
-| Page faults | Solo perfdata |
-| Active clients | Solo perfdata |
-| Database sizes (data, storage, index) | Solo perfdata |
-| Filesystem (total, used, free) | Solo perfdata |
-| Oplog size (max, used) | Solo perfdata |
+| Connection usage % | `conn_usage_pct` (above) |
+| Replication lag | `repl_lag` (above, secondi) |
+| Oplog window | `oplog_window` (below, ore) |
+| WiredTiger cache usage % | `cache_usage_pct` (above) |
+| WiredTiger tickets read/write % | `tickets_read_pct`, `tickets_write_pct` (above) |
+| Queue total | `queue_total` (above) |
+| Cursors open / timed out | `cursor_open`, `cursor_timed_out` (above) |
+| Assertions | `assertions_regular`, `assertions_warning` (above) |
+| Operations/sec, memory, network, document ops, page faults, active clients, database sizes, filesystem, oplog size, transactions | Solo perfdata |
 
-> **⚠️ Oplog window**: se la finestra oplog si riduce troppo, i secondary che restano indietro oltre la finestra non potranno più recuperare e richiederanno un **full resync**. Le soglie oplog sono **invertite**: l'allarme scatta quando la finestra scende **sotto** il valore configurato.
+> **⚠️ Oplog window**: le soglie oplog sono **invertite** (mode `below`): l'allarme scatta quando la finestra scende **sotto** il valore configurato.
+
+> **⚠️ WiredTiger tickets**: in MongoDB 7.0+ il pool è dinamico (max 128). Le soglie usano la **% di utilizzo** così funzionano sia con pool fisso che dinamico.
 
 ```bash
-# Metriche con soglie connessioni
-./check_mongodb.py --uri "mongodb://host1:27017,host2:27017/" \
-    --metrics --warning 80 --critical 90
-
-# Metriche con soglie oplog (warning se < 48h, critical se < 24h)
 ./check_mongodb.py --uri "mongodb://host1:27017,host2:27017/?replicaSet=rs0" \
-    --metrics --oplog-warning 48 --oplog-critical 24
+    --metrics --thresholds '{
+      "conn_usage_pct": {"warning": 80, "critical": 90},
+      "oplog_window":   {"warning": 48, "critical": 24, "mode": "below"},
+      "tickets_read_pct":  {"warning": 80, "critical": 95},
+      "tickets_write_pct": {"warning": 80, "critical": 95},
+      "repl_lag":        {"warning": 30, "critical": 120}
+    }'
 ```
 
 ### `--filesystem` — Occupazione filesystem
@@ -103,7 +101,7 @@ Controlla lo spazio disco tramite `dbStats` (`fsTotalSize` / `fsUsedSize`).
 
 ```bash
 ./check_mongodb.py --uri "mongodb://host1:27017,host2:27017/" \
-    --filesystem --warning 85 --critical 95
+    --filesystem --thresholds '{"fs_usage_pct": {"warning": 85, "critical": 95}}'
 ```
 
 ## Parametri
@@ -118,10 +116,7 @@ Controlla lo spazio disco tramite `dbStats` (`fsTotalSize` / `fsUsedSize`).
 | `--tls` | Abilita TLS/SSL | `false` |
 | `--tls-insecure` | Disabilita verifica certificato TLS | `false` |
 | `--timeout` | Timeout connessione (secondi) | `10` |
-| `--warning`, `-w` | Soglia warning | — |
-| `--critical`, `-c` | Soglia critical | — |
-| `--oplog-warning` | Warning se oplog window ≤ N ore (metrics) | — |
-| `--oplog-critical` | Critical se oplog window ≤ N ore (metrics) | — |
+| `--thresholds` | JSON con soglie per metrica (vedi sopra) | — |
 | `--replicaset` | Nome RS atteso (override URI) | — |
 | `--verbose`, `-v` | Output verboso per debug | `false` |
 
@@ -178,14 +173,7 @@ object CheckCommand "mongodb" {
         "--filesystem" = {
             set_if = "$mongodb_check_filesystem$"
         }
-        "--warning" = {
-            value = "$mongodb_warning$"
-            set_if = {{ macro("$mongodb_warning$") != false }}
-        }
-        "--critical" = {
-            value = "$mongodb_critical$"
-            set_if = {{ macro("$mongodb_critical$") != false }}
-        }
+
         "--timeout" = {
             value = "$mongodb_timeout$"
             set_if = {{ macro("$mongodb_timeout$") != false }}
@@ -197,13 +185,9 @@ object CheckCommand "mongodb" {
         "--verbose" = {
             set_if = "$mongodb_verbose$"
         }
-        "--oplog-warning" = {
-            value = "$mongodb_oplog_warning$"
-            set_if = {{ macro("$mongodb_oplog_warning$") != false }}
-        }
-        "--oplog-critical" = {
-            value = "$mongodb_oplog_critical$"
-            set_if = {{ macro("$mongodb_oplog_critical$") != false }}
+        "--thresholds" = {
+            value = "$mongodb_thresholds$"
+            set_if = {{ macro("$mongodb_thresholds$") != false }}
         }
     }
 }

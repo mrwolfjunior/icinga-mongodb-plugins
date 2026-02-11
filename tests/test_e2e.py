@@ -115,7 +115,7 @@ class TestSingleNode:
     def test_filesystem_ok(self):
         code, out, _ = run_check(
             "--uri", SINGLE_URI, "--filesystem",
-            "--warning", "85", "--critical", "95"
+            "--thresholds", '{"fs_usage_pct": {"warning": 85, "critical": 95}}'
         )
         assert code in (OK, WARNING)  # Depends on actual disk usage
 
@@ -155,7 +155,7 @@ class TestReplicaSet:
     def test_filesystem_ok(self):
         code, out, _ = run_check(
             "--uri", RS_URI, "--filesystem",
-            "--warning", "85", "--critical", "95"
+            "--thresholds", '{"fs_usage_pct": {"warning": 85, "critical": 95}}'
         )
         assert code in (OK, WARNING)
 
@@ -249,7 +249,8 @@ class TestReplicaSet:
 
             code, out, _ = run_check(
                 "--uri", RS_URI, "--filesystem",
-                "--warning", "85", "--critical", "95", "--timeout", "5"
+                "--thresholds", '{"fs_usage_pct": {"warning": 85, "critical": 95}}',
+                "--timeout", "5"
             )
             assert code == CRITICAL
         finally:
