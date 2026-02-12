@@ -74,6 +74,11 @@ def bytes_to_gb(value):
     return round(value / (1024 ** 3), 2)
 
 
+def sanitize_metric_name(name):
+    """Sanitize metric name: lowercase, replace . : - with _"""
+    return name.lower().replace(".", "_").replace(":", "_").replace("-", "_")
+
+
 # ---------------------------------------------------------------------------
 # IcingaOutput — formats plugin output
 # ---------------------------------------------------------------------------
@@ -432,7 +437,11 @@ class AvailabilityChecker:
             except Exception as e:
                 direct_error = str(e)
 
-            safe_node = node_name.replace(".", "_").replace(":", "_")
+            except Exception as e:
+                direct_error = str(e)
+
+            safe_node = sanitize_metric_name(node_name)
+            safe_rs_name = sanitize_metric_name(rs_name)
 
             if direct_ok:
                 # Direct connection succeeded — verify consistency with indirect
@@ -443,7 +452,7 @@ class AvailabilityChecker:
                     if indirect_health == 1 and indirect_state in (1, 2, 7):
                         # Both direct and indirect say OK
                         nodes_ok += 1
-                        self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 1, "", "", "", "0", "1")
+                        self.output.add_perfdata(f"rs_{safe_rs_name}_{safe_node}_state", 1, "", "", "", "0", "1")
                         if self.verbose:
                             self.output.add_long_output(
                                 f"[OK] {node_name}: direct=OK, indirect={indirect_info['stateStr']}"
@@ -456,7 +465,7 @@ class AvailabilityChecker:
                             f"'{indirect_info['stateStr']}' — possible split-brain or recovery"
                         )
                         nodes_down += 1
-                        self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
+                        self.output.add_perfdata(f"rs_{safe_rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
                 else:
                     # Direct OK but not found in rsStatus — might be a misconfiguration
                     self.output.add_message(
@@ -465,7 +474,7 @@ class AvailabilityChecker:
                         f"possible wrong node or misconfigured URI"
                     )
                     nodes_down += 1
-                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
+                    self.output.add_perfdata(f"rs_{safe_rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
             else:
                 # Direct connection failed
                 if is_arbiter and indirect_info and indirect_info.get("health") == 1:
@@ -473,7 +482,7 @@ class AvailabilityChecker:
                     # (arbiter may be on a segregated network)
                     nodes_ok += 1
                     arbiter_issues.append(node_name)
-                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 1, "", "", "", "0", "1")
+                    self.output.add_perfdata(f"rs_{safe_rs_name}_{safe_node}_state", 1, "", "", "", "0", "1")
                     if self.verbose:
                         self.output.add_long_output(
                             f"[INFO] Arbiter {node_name}: not reachable directly but RS reports "
@@ -496,7 +505,7 @@ class AvailabilityChecker:
                             f"direct connection failed: {direct_error})"
                         )
                     nodes_down += 1
-                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
+                    self.output.add_perfdata(f"rs_{safe_rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
                 else:
                     self.output.add_message(
                         NAGIOS_CRITICAL,
@@ -504,7 +513,7 @@ class AvailabilityChecker:
                         f"(error: {direct_error})"
                     )
                     nodes_down += 1
-                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
+                    self.output.add_perfdata(f"rs_{safe_rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
 
         # Summary
         if nodes_down > 0:
@@ -537,9 +546,10 @@ class AvailabilityChecker:
             )
 
         # Perfdata
-        self.output.add_perfdata(f"rs_{rs_name}_nodes_ok", nodes_ok, "", "", "", "0", str(total_uri_nodes))
-        self.output.add_perfdata(f"rs_{rs_name}_nodes_down", nodes_down, "", "", "", "0", str(total_uri_nodes))
-        self.output.add_perfdata(f"rs_{rs_name}_quorum", "1" if quorum_ok else "0", "", "", "", "0", "1")
+        safe_rs_name = sanitize_metric_name(rs_name)
+        self.output.add_perfdata(f"rs_{safe_rs_name}_nodes_ok", nodes_ok, "", "", "", "0", str(total_uri_nodes))
+        self.output.add_perfdata(f"rs_{safe_rs_name}_nodes_down", nodes_down, "", "", "", "0", str(total_uri_nodes))
+        self.output.add_perfdata(f"rs_{safe_rs_name}_quorum", "1" if quorum_ok else "0", "", "", "", "0", "1")
 
     def _check_sharded(self, client, info):
         """Check a Sharded Cluster deployment."""
@@ -568,7 +578,7 @@ class AvailabilityChecker:
         mongos_down = 0
         for host, port in uri_hosts:
             node_name = f"{host}:{port}"
-            safe_mongos = node_name.replace(".", "_").replace(":", "_")
+            safe_mongos = sanitize_metric_name(node_name)
             try:
                 node_client = self.conn_manager.connect_to_node(host, port)
                 node_client.admin.command("ping")
@@ -603,6 +613,7 @@ class AvailabilityChecker:
         # 4. Check each shard's replicaset health
         for shard in shards:
             shard_id = shard.get("_id", "unknown")
+            safe_shard_id = sanitize_metric_name(shard_id)
             shard_host = shard.get("host", "")
             # shard host format: "rsName/host1:port1,host2:port2,..."
             if "/" in shard_host:
@@ -664,13 +675,13 @@ class AvailabilityChecker:
                     health = member.get("health", 0)
                     state_str = member.get("stateStr", "UNKNOWN")
 
-                    safe_member = member_name.replace(".", "_").replace(":", "_")
+                    safe_member = sanitize_metric_name(member_name)
                     if health == 1 and state in (1, 2, 7):
                         shard_ok += 1
-                        self.output.add_perfdata(f"shard_{shard_id}_{safe_member}_state", 1, "", "", "", "0", "1")
+                        self.output.add_perfdata(f"shard_{safe_shard_id}_{safe_member}_state", 1, "", "", "", "0", "1")
                     else:
                         shard_down += 1
-                        self.output.add_perfdata(f"shard_{shard_id}_{safe_member}_state", 0, "", "", "", "0", "1")
+                        self.output.add_perfdata(f"shard_{safe_shard_id}_{safe_member}_state", 0, "", "", "", "0", "1")
                         self.output.add_message(
                             NAGIOS_CRITICAL,
                             f"Shard '{shard_id}' member {member_name}: {state_str}"
@@ -683,10 +694,10 @@ class AvailabilityChecker:
                         f"Shard '{shard_id}' ({actual_rs_name}): all {shard_ok} members healthy"
                     )
                 self.output.add_perfdata(
-                    f"shard_{shard_id}_ok", shard_ok, "", "", "", "0", str(total_shard_members)
+                    f"shard_{safe_shard_id}_ok", shard_ok, "", "", "", "0", str(total_shard_members)
                 )
                 self.output.add_perfdata(
-                    f"shard_{shard_id}_down", shard_down, "", "", "", "0", str(total_shard_members)
+                    f"shard_{safe_shard_id}_down", shard_down, "", "", "", "0", str(total_shard_members)
                 )
             except Exception as e:
                 self.output.add_message(
@@ -732,7 +743,7 @@ class AvailabilityChecker:
                         cfg_down = 0
                         for m in cfg_status.get("members", []):
                             m_name = m.get("name", "")
-                            safe_m = m_name.replace(".", "_").replace(":", "_")
+                            safe_m = sanitize_metric_name(m_name)
                             if m.get("health", 0) == 1 and m.get("state", -1) in (1, 2):
                                 cfg_ok += 1
                                 self.output.add_perfdata(f"config_{safe_m}_state", 1, "", "", "", "0", "1")
@@ -902,7 +913,7 @@ class MetricsChecker:
     def _collect_metrics(self, client, node_name):
         """Collect serverStatus metrics from a single node."""
         server_status = client.admin.command("serverStatus")
-        safe_name = node_name.replace(".", "_").replace(":", "_")
+        safe_name = sanitize_metric_name(node_name)
         te = self.thresholds
 
         # --- Connections ---
@@ -1215,7 +1226,7 @@ class FilesystemChecker:
     def _check_node_fs(self, client, node_name):
         """Check filesystem usage on a single node."""
         db_stats = client.admin.command("dbStats")
-        safe_name = node_name.replace(".", "_").replace(":", "_")
+        safe_name = sanitize_metric_name(node_name)
 
         fs_total = db_stats.get("fsTotalSize")
         fs_used = db_stats.get("fsUsedSize")
