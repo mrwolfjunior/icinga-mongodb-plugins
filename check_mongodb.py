@@ -1350,35 +1350,40 @@ def parse_arguments():
         description="Icinga/Nagios plugin for MongoDB monitoring",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Check modes (exactly one required):
-  --availability    Check node/replica set availability and topology
-  --metrics         Collect performance metrics per node
-  --filesystem      Check filesystem usage with dynamic thresholds
+Threshold Validation:
+  The --thresholds argument accepts a JSON string mapping metric names to warning/critical levels.
+  
+  Format: '{"metric_name": {"warning": <val>, "critical": <val>, "mode": "above"|"below"}}'
+  Default mode is "above" (alert if value >= threshold). Use "below" for metrics like oplog_window.
 
-Examples:
-  # Check ReplicaSet availability
-  %(prog)s --uri "mongodb://host1:27017,host2:27017,host3:27017/?replicaSet=myRS" \\
-           --availability --username admin --password secret
+  Available Metrics:
+    - conn_usage_pct       : Connection usage percentage (0-100)
+    - queue_total          : Global lock queue size
+    - cache_usage_pct      : WiredTiger cache usage percentage
+    - tickets_read_pct     : WiredTiger read tickets usage percentage
+    - tickets_write_pct    : WiredTiger write tickets usage percentage
+    - repl_lag             : Replication lag (seconds)
+    - oplog_window         : Oplog window (hours) [Recommended mode: "below"]
+    - cursor_open          : Number of open cursors
+    - cursor_timed_out     : Number of cursors timed out
+    - assertions_regular   : Regular assertions count
+    - assertions_warning   : Warning assertions count
+    - fs_usage_pct         : Filesystem usage percentage (only for --filesystem)
 
-  # Check metrics with connection usage thresholds
-  %(prog)s --uri "mongodb://host1:27017/" --metrics --warning 80 --critical 90
+  Examples:
+    # Check metrics with thresholds
+    %(prog)s --uri "mongodb://host:27017" --metrics \\
+             --thresholds '{"conn_usage_pct": {"warning": 80, "critical": 90}, "repl_lag": {"warning": 10, "critical": 30}}'
 
-  # Check filesystem with dynamic thresholds
-  %(prog)s --uri "mongodb://host1:27017,host2:27017/" --filesystem \\
-           --warning 85 --critical 95
+    # Check oplog window (alert if less than 24h)
+    %(prog)s --uri "mongodb://host:27017" --metrics \\
+             --thresholds '{"oplog_window": {"warning": 48, "critical": 24, "mode": "below"}}'
 
-  # Collect all metrics (perfdata + thresholds)
-  %(prog)s --uri "mongodb://host1:27017/" --metrics
-
-  # Using SRV connection string with LDAP auth
-  %(prog)s --uri "mongodb+srv://cluster.example.com/" --availability \\
-           --username ldapuser --password secret --auth-mechanism PLAIN
-
-Exit codes:
-  0 = OK       - Everything is fine
-  1 = WARNING  - Threshold exceeded (warning level)
-  2 = CRITICAL - Node(s) down, threshold exceeded (critical), or error
-  3 = UNKNOWN  - Plugin error or unsupported check
+  Exit codes:
+    0 = OK
+    1 = WARNING
+    2 = CRITICAL
+    3 = UNKNOWN
         """
     )
 
