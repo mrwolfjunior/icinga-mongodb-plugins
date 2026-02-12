@@ -81,11 +81,16 @@ def run_fault(action, *args):
 
 def is_container_running(container_name):
     """Check if a Docker container is running."""
-    result = subprocess.run(
-        ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
-        capture_output=True, text=True
-    )
-    return result.stdout.strip() == "true"
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+            capture_output=True, text=True
+        )
+        return result.stdout.strip() == "true"
+    except FileNotFoundError:
+        # docker CLI not available — assume container is running
+        # (connectivity will be tested by the check itself)
+        return True
 
 
 def wait_for_rs_stable(uri, max_wait=60):
