@@ -1038,5 +1038,70 @@ class TestThresholdEngine(unittest.TestCase):
         assert len(te.thresholds) == 0
 
 
+# =====================================================================
+# MetricsChecker — Permission Tests
+# =====================================================================
+
+class TestMetricsCheckerPermissions(unittest.TestCase):
+    """Test permission-aware error handling in MetricsChecker."""
+
+    def _mock_server_status(self):
+        return {"connections": {"current": 10, "available": 990, "active": 5, "totalCreated": 100}, "opcounters": {}, "globalLock": {"currentQueue": {}}, "wiredTiger": {}}
+
+    def test_permission_denied_ignored_if_no_thresholds(self):
+        """Permission error on unmonitored metric -> WARNING."""
+        from pymongo.errors import OperationFailure
+        
+        output = IcingaOutput()
+        conn_mgr = MagicMock(spec=MongoConnectionManager)
+        conn_mgr.parse_hosts_from_uri.return_value = [("h1", 27017)]
+        
+        mock_client = MagicMock()
+        
+        def mock_command(cmd, *args, **kwargs):
+            if cmd == "serverStatus": return self._mock_server_status()
+            if cmd == "replSetGetStatus": raise OperationFailure("unauthorized", 13)
+            return {}
+        mock_client.admin.command.side_effect = mock_command
+        
+        conn_mgr.connect_to_node.return_value = mock_client
+        
+        # No thresholds set for 'repl_lag'
+        checker = MetricsChecker(conn_mgr, output, thresholds=ThresholdEngine({}))
+        checker.check()
+        
+        # Should be WARNING (ignored)
+        assert output.status == NAGIOS_WARNING
+        assert "Permission denied" in output.messages[0]
+        assert "ignored" in output.messages[0]
+
+    def test_permission_denied_critical_if_threshold_set(self):
+        """Permission error on monitored metric -> CRITICAL."""
+        from pymongo.errors import OperationFailure
+        
+        output = IcingaOutput()
+        conn_mgr = MagicMock(spec=MongoConnectionManager)
+        conn_mgr.parse_hosts_from_uri.return_value = [("h1", 27017)]
+        
+        mock_client = MagicMock()
+        def mock_command(cmd, *args, **kwargs):
+            if cmd == "serverStatus": return self._mock_server_status()
+            if cmd == "replSetGetStatus": raise OperationFailure("unauthorized", 13)
+            return {}
+        mock_client.admin.command.side_effect = mock_command
+        conn_mgr.connect_to_node.return_value = mock_client
+        
+        # Threshold set for 'repl_lag'
+        checker = MetricsChecker(
+            conn_mgr, output, 
+            thresholds=ThresholdEngine({"repl_lag": {"warning": 10, "critical": 20}})
+        )
+        checker.check()
+        
+        # Should be CRITICAL (required)
+        assert output.status == NAGIOS_CRITICAL
+        assert "Permission denied" in output.messages[0]
+        assert "required by thresholds" in output.messages[0]
+
 if __name__ == "__main__":
     unittest.main()

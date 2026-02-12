@@ -879,6 +879,23 @@ class MetricsChecker:
         self.thresholds = thresholds or ThresholdEngine()
         self.verbose = verbose
 
+    def handle_permission_error(self, error, metric_keys):
+        """Handle permission errors based on threshold configuration."""
+        # check if any of the affected keys are in the threshold configuration
+        needed = any(k in self.thresholds.thresholds for k in metric_keys)
+        
+        if needed:
+            self.output.add_message(
+                NAGIOS_CRITICAL,
+                f"Permission denied for metrics {metric_keys} (required by thresholds): {error}"
+            )
+        else:
+            # Downgrade to WARNING if not explicitly monitored
+            self.output.add_message(
+                NAGIOS_WARNING,
+                f"Permission denied for metrics {metric_keys} (ignored): {error}"
+            )
+
     def check(self):
         """Run metrics check on each node in the URI."""
         uri_hosts = self.conn_manager.parse_hosts_from_uri()
@@ -998,6 +1015,7 @@ class MetricsChecker:
                 te.check(f"tickets_{rw}_pct", tk_usage_pct, self.output, node_name, "%")
 
         # --- Replication Lag (if replicaset member) ---
+        # --- Replication Lag (if replicaset member) ---
         try:
             rs_status = client.admin.command("replSetGetStatus")
             primary_optime = None
@@ -1013,8 +1031,11 @@ class MetricsChecker:
                 te.check("repl_lag", lag_seconds, self.output, node_name, "s")
             elif primary_optime and my_optime:
                 self.output.add_perfdata(f"{safe_name}_repl_lag", "0", "s")
-        except OperationFailure:
-            # Not a replicaset member — skip replication lag
+        except OperationFailure as e:
+            if e.code == 13:  # Unauthorized
+                self.handle_permission_error(e, ["repl_lag"])
+            # else: Not a replicaset member — skip replication lag
+        except Exception:
             pass
 
         # --- Oplog Window (if replicaset member) ---
@@ -1035,6 +1056,9 @@ class MetricsChecker:
                     f"{safe_name}_oplog_window", f"{oplog_window_hours:.1f}", "h"
                 )
                 te.check("oplog_window", oplog_window_hours, self.output, node_name, "h")
+        except OperationFailure as e:
+            if e.code == 13:
+                self.handle_permission_error(e, ["oplog_window"])
         except Exception:
             # Not a replicaset member or oplog not available
             pass
@@ -1046,6 +1070,9 @@ class MetricsChecker:
             oplog_used = oplog_stats.get("storageSize", oplog_stats.get("size", 0))
             self.output.add_perfdata(f"{safe_name}_oplog_max_size", bytes_to_gb(oplog_max), "GB")
             self.output.add_perfdata(f"{safe_name}_oplog_used_size", bytes_to_gb(oplog_used), "GB")
+        except OperationFailure as e:
+            if e.code == 13:
+                self.handle_permission_error(e, ["oplog_max_size", "oplog_used_size"])
         except Exception:
             pass
 
@@ -1129,8 +1156,15 @@ class MetricsChecker:
             self.output.add_perfdata(f"{safe_name}_total_data_size", bytes_to_gb(total_data_size), "GB")
             self.output.add_perfdata(f"{safe_name}_total_storage_size", bytes_to_gb(total_storage_size), "GB")
             self.output.add_perfdata(f"{safe_name}_total_index_size", bytes_to_gb(total_index_size), "GB")
-            self.output.add_perfdata(f"{safe_name}_total_collections", total_collections)
-            self.output.add_perfdata(f"{safe_name}_total_objects", total_objects)
+            self.output.add_perfdata(f"{safe_name}_total_collections", total_collections, "c")
+            self.output.add_perfdata(f"{safe_name}_total_objects", total_objects, "c")
+        except OperationFailure as e:
+            if e.code == 13:
+                # Metrics derived from dbStats
+                affected = ["total_data_size", "total_storage_size", "total_index_size"]
+                self.handle_permission_error(e, affected)
+            elif self.verbose:
+                 self.output.add_long_output(f"[WARN] {node_name}: could not list databases: {e}")
         except Exception as e:
             if self.verbose:
                 self.output.add_long_output(f"[WARN] {node_name}: could not list databases: {e}")
