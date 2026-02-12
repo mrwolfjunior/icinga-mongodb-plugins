@@ -38,9 +38,12 @@ except ImportError:
     print("UNKNOWN - pymongo is not installed. Install it with: pip install 'pymongo>=4.0,<5.0'")
     sys.exit(3)
 
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+__version__ = "26.02.12"
 
 NAGIOS_OK = 0
 NAGIOS_WARNING = 1
@@ -1378,6 +1381,9 @@ Exit codes:
   3 = UNKNOWN  - Plugin error or unsupported check
         """
     )
+
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
 
     # Connection
     parser.add_argument("--uri", required=True,
