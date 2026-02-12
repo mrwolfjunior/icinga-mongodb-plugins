@@ -186,7 +186,8 @@ services:
       test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
   mongos2:
     image: mongo:7.0
@@ -209,7 +210,8 @@ services:
       test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
   # --- Initializer ---
   sharded-init:
@@ -233,8 +235,6 @@ services:
       shard2b:
         condition: service_healthy
       shard2c:
-        condition: service_healthy
-      mongos1:
         condition: service_healthy
     entrypoint: [ "bash", "-c" ]
     command:
@@ -278,6 +278,16 @@ services:
           });
         '
         sleep 15
+
+        echo "=== Waiting for mongos1 to be ready ==="
+        for i in $(seq 1 30); do
+          if mongosh --host mongos1:27017 --eval "db.adminCommand('ping')" 2>/dev/null; then
+            echo "mongos1 is ready!"
+            break
+          fi
+          echo "Waiting for mongos1... (attempt $i/30)"
+          sleep 5
+        done
 
         echo "=== Adding shards to cluster ==="
         mongosh --host mongos1:27017 --eval '
