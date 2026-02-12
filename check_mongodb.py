@@ -140,7 +140,10 @@ class MongoConnectionManager:
 
     def __init__(self, uri, username=None, password=None, auth_mechanism=None,
                  auth_source=None, tls=True, tls_insecure=False, timeout=10):
-        self.uri = uri
+        if not uri.startswith("mongodb://") and not uri.startswith("mongodb+srv://"):
+            self.uri = f"mongodb://{uri}"
+        else:
+            self.uri = uri
         self.username = username
         self.password = password
         self.auth_mechanism = auth_mechanism
