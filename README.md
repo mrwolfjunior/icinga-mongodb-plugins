@@ -1,49 +1,95 @@
-# check_mongodb — Icinga Plugin per MongoDB
+# check_mongodb — Icinga Plugin for MongoDB
 
-Plugin monolitico Python per il monitoraggio di istanze MongoDB on-prem via Icinga/Nagios.
+Monolithic Python plugin for monitoring on-prem MongoDB instances via Icinga/Nagios.
 
-Supporta: **Single Node**, **ReplicaSet**, **ReplicaSet con Arbiter**, **Sharded Cluster**.
+Supports: **Standalone**, **ReplicaSet**, **ReplicaSet with Arbiter**, **Sharded Cluster**.
 
-## Requisiti
+## How It Works
 
-| Requisito | Versione |
+The plugin automatically detects the MongoDB topology and adapts its checks accordingly.
+
+```mermaid
+flowchart TD
+    A["Start: check_mongodb.py"] --> B["Parse CLI args\n(--uri, --availability, --metrics, --filesystem)"]
+    B --> C["Connect to MongoDB URI\n(with auth, TLS, timeout)"]
+    C --> D{"Topology Detection\n(hello / isMaster command)"}
+
+    D -->|"msg = 'isdbgrid'"| E["🟣 Sharded Cluster\n(connected to mongos)"]
+    D -->|"setName present"| F["🔵 ReplicaSet"]
+    D -->|"neither"| G["🟢 Standalone"]
+
+    E --> H{"Check Mode?"}
+    F --> H
+    G --> H
+
+    H -->|--availability| I["Availability Check"]
+    H -->|--metrics| J["Metrics Check"]
+    H -->|--filesystem| K["Filesystem Check"]
+
+    I --> I1{"Topology?"}
+    I1 -->|Standalone| I2["Ping node\n→ OK / CRITICAL"]
+    I1 -->|ReplicaSet| I3["For each node in URI:\n1. Direct connect (ping)\n2. Indirect check (replSetGetStatus)\n3. Compare direct vs indirect state\n4. Validate RS name\n5. Verify quorum (majority)"]
+    I1 -->|Sharded| I4["For each mongos: ping\nFor each shard RS:\n  replSetGetStatus → check members\nFor config RS: check members"]
+
+    I3 --> I5{"Arbiter unreachable\nbut RS says healthy?"}
+    I5 -->|Yes| I6["OK — arbiter may be\non segregated network"]
+    I5 -->|No| I7["CRITICAL — node down"]
+
+    J --> J1["Connect to each node directly\nCollect serverStatus:\n• connections, opcounters\n• memory, network, WiredTiger\n• cursors, assertions, transactions\n• replication lag, oplog window"]
+    J1 --> J2["Apply --thresholds\n(above/below mode)"]
+    J2 --> J3["Emit perfdata for Icinga"]
+
+    K --> K1["For each node: dbStats\n→ fsTotalSize, fsUsedSize\n→ usage %"]
+    K1 --> K2["Apply dynamic thresholds\n(logarithmic scaling for large volumes)"]
+
+    style E fill:#9b59b6,color:white
+    style F fill:#3498db,color:white
+    style G fill:#27ae60,color:white
+    style I2 fill:#27ae60,color:white
+    style I6 fill:#27ae60,color:white
+    style I7 fill:#e74c3c,color:white
+```
+
+## Requirements
+
+| Requirement | Version |
 |---|---|
 | Python | ≥ 3.8 |
 | pymongo | ≥ 4.0, < 5.0 |
 | dnspython | ≥ 2.0 |
 | MongoDB | 5.x — 8.2 |
 
-### Installazione
+### Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Per lo sviluppo e i test:
+For development and testing:
 
 ```bash
 pip install -r requirements-dev.txt
 ```
 
-## Modalità di Check
+## Check Modes
 
-Lo script supporta **3 modalità** mutuamente esclusive:
+The script supports **3 mutually exclusive modes**:
 
-### `--availability` — Disponibilità nodi
+### `--availability` — Node Availability
 
-Verifica che tutti i nodi siano raggiungibili e in stato sano.
+Verifies that all nodes are reachable and in a healthy state.
 
-- **Check diretto**: connessione diretta a ogni nodo dichiarato nella URI
-- **Check indiretto**: interroga `replSetGetStatus` per confrontare lo stato visto dal cluster vs lo stato visto da Icinga
-- **Validazione**: verifica che il nome del ReplicaSet corrisponda a quello nella URI
-- **Quorum**: verifica che la majority sia rispettata per le scritture
-- **Arbiter**: se l'arbiter non è raggiungibile direttamente ma rsStatus dice che è sano → OK (può essere su rete segregata)
+- **Direct check**: connects directly to each node declared in the URI
+- **Indirect check**: queries `replSetGetStatus` to compare the state seen by the cluster vs the state seen by Icinga
+- **Validation**: verifies that the ReplicaSet name matches the one in the URI
+- **Quorum**: verifies that majority is maintained for writes
+- **Arbiter**: if the arbiter is not directly reachable but rsStatus reports it as healthy → OK (it may be on a segregated network)
 
 **Severity**:
-- Qualsiasi nodo data-bearing giù → **CRITICAL**
-- Nome RS non corrispondente → **CRITICAL**
-- Nodo raggiungibile ma RS lo vede in stato anomalo → **CRITICAL**
-- Quorum perso → **CRITICAL**
+- Any data-bearing node down → **CRITICAL**
+- RS name mismatch → **CRITICAL**
+- Node reachable but RS reports anomalous state → **CRITICAL**
+- Quorum lost → **CRITICAL**
 
 ```bash
 # ReplicaSet
@@ -55,25 +101,25 @@ Verifica che tutti i nodi siano raggiungibili e in stato sano.
     --availability --tls
 ```
 
-### `--metrics` — Metriche prestazionali
+### `--metrics` — Performance Metrics
 
-Connessione DIRETTA nodo per nodo per raccogliere metriche da `serverStatus`.
+Connects DIRECTLY to each node to collect metrics from `serverStatus`.
 
-| Metrica | Soglia applicabile via `--thresholds` |
+| Metric | Threshold key via `--thresholds` |
 |---|---|
 | Connection usage % | `conn_usage_pct` (above) |
-| Replication lag | `repl_lag` (above, secondi) |
-| Oplog window | `oplog_window` (below, ore) |
+| Replication lag | `repl_lag` (above, seconds) |
+| Oplog window | `oplog_window` (below, hours) |
 | WiredTiger cache usage % | `cache_usage_pct` (above) |
 | WiredTiger tickets read/write % | `tickets_read_pct`, `tickets_write_pct` (above) |
 | Queue total | `queue_total` (above) |
 | Cursors open / timed out | `cursor_open`, `cursor_timed_out` (above) |
 | Assertions | `assertions_regular`, `assertions_warning` (above) |
-| Operations/sec, memory, network, document ops, page faults, active clients, database sizes, filesystem, oplog size, transactions | Solo perfdata |
+| Operations/sec, memory, network, document ops, page faults, active clients, database sizes, filesystem, oplog size, transactions | Perfdata only |
 
-> **⚠️ Oplog window**: le soglie oplog sono **invertite** (mode `below`): l'allarme scatta quando la finestra scende **sotto** il valore configurato.
+> **⚠️ Oplog window**: thresholds are **inverted** (mode `below`): the alert fires when the window drops **below** the configured value.
 
-> **⚠️ WiredTiger tickets**: in MongoDB 7.0+ il pool è dinamico (max 128). Le soglie usano la **% di utilizzo** così funzionano sia con pool fisso che dinamico.
+> **⚠️ WiredTiger tickets**: in MongoDB 7.0+ the pool is dynamic (max 128). Thresholds use **usage %** so they work with both fixed and dynamic pools.
 
 ```bash
 ./check_mongodb.py --uri "mongodb://host1:27017,host2:27017/?replicaSet=rs0" \
@@ -86,13 +132,13 @@ Connessione DIRETTA nodo per nodo per raccogliere metriche da `serverStatus`.
     }'
 ```
 
-### `--filesystem` — Occupazione filesystem
+### `--filesystem` — Filesystem Usage
 
-Controlla lo spazio disco tramite `dbStats` (`fsTotalSize` / `fsUsedSize`).
+Checks disk space via `dbStats` (`fsTotalSize` / `fsUsedSize`).
 
-**Soglie dinamiche (formula logaritmica)**: su volumi grandi la soglia percentuale viene automaticamente adattata per richiedere più spazio libero in termini assoluti.
+**Dynamic thresholds (logarithmic formula)**: on large volumes the percentage threshold is automatically adjusted to require more free space in absolute terms.
 
-| Volume | Soglia base 90% | Spazio libero richiesto |
+| Volume | Base threshold 90% | Free space required |
 |---|---|---|
 | 100 GB | 90% | 10 GB |
 | 1 TB | ~93% | ~70 GB |
@@ -104,44 +150,44 @@ Controlla lo spazio disco tramite `dbStats` (`fsTotalSize` / `fsUsedSize`).
     --filesystem --thresholds '{"fs_usage_pct": {"warning": 85, "critical": 95}}'
 ```
 
-## Parametri
+## Parameters
 
-| Parametro | Descrizione | Default |
+| Parameter | Description | Default |
 |---|---|---|
-| `--uri` | Connection string MongoDB | **obbligatorio** |
-| `--username`, `-u` | Username autenticazione | — |
-| `--password`, `-p` | Password autenticazione | — |
+| `--uri` | MongoDB connection string | **required** |
+| `--username`, `-u` | Authentication username | — |
+| `--password`, `-p` | Authentication password | — |
 | `--auth-mechanism` | `SCRAM-SHA-256`, `SCRAM-SHA-1`, `PLAIN` (LDAP) | auto |
-| `--auth-source` | Database autenticazione | `admin` (`$external` per LDAP) |
-| `--tls` | Abilita TLS/SSL | `false` |
-| `--tls-insecure` | Disabilita verifica certificato TLS | `false` |
-| `--timeout` | Timeout connessione (secondi) | `10` |
-| `--thresholds` | JSON con soglie per metrica (vedi sopra) | — |
-| `--replicaset` | Nome RS atteso (override URI) | — |
-| `--verbose`, `-v` | Output verboso per debug | `false` |
+| `--auth-source` | Authentication database | `admin` (`$external` for LDAP) |
+| `--tls` | Enable TLS/SSL | `false` |
+| `--tls-insecure` | Disable TLS certificate verification | `false` |
+| `--timeout` | Connection timeout (seconds) | `10` |
+| `--thresholds` | JSON with per-metric thresholds (see above) | — |
+| `--replicaset` | Expected RS name (overrides URI) | — |
+| `--verbose`, `-v` | Verbose output for debugging | `false` |
 
 ## Exit Codes
 
-| Codice | Stato | Descrizione |
+| Code | Status | Description |
 |---|---|---|
-| 0 | OK | Tutto funziona correttamente |
-| 1 | WARNING | Soglia warning superata |
-| 2 | CRITICAL | Nodo/i giù, soglia critical superata, errore grave |
-| 3 | UNKNOWN | Errore plugin o check non supportato |
+| 0 | OK | Everything is working correctly |
+| 1 | WARNING | Warning threshold exceeded |
+| 2 | CRITICAL | Node(s) down, critical threshold exceeded, severe error |
+| 3 | UNKNOWN | Plugin error or unsupported check |
 
 ## Performance Data
 
-L'output include perfdata nel formato standard Nagios:
+Output includes perfdata in standard Nagios format:
 
 ```
 STATUS - message | label=value[UOM];warn;crit;min;max
 ```
 
-I label usano il formato `<host>_<port>_<metrica>` per identificare univocamente ogni metrica per nodo.
+Labels use the format `<host>_<port>_<metric>` to uniquely identify each metric per node.
 
-## Configurazione Icinga2
+## Icinga2 Configuration
 
-Esempio di `CheckCommand`:
+Example `CheckCommand`:
 
 ```
 object CheckCommand "mongodb" {
@@ -193,7 +239,7 @@ object CheckCommand "mongodb" {
 }
 ```
 
-Esempio di `Service`:
+Example `Service`:
 
 ```
 apply Service "mongodb-availability" {
@@ -217,17 +263,17 @@ apply Service "mongodb-availability" {
 python -m pytest tests/test_check_mongodb.py -v
 ```
 
-### End-to-End Tests (richiede Docker)
+### End-to-End Tests (requires Docker)
 
 ```bash
-# Avvia ambiente di test
+# Start test environment
 docker compose -f docker/docker-compose.replicaset.yml up -d
 sleep 30
 
-# Esegui test (metodo consigliato per evitare problemi DNS)
+# Run tests (recommended method to avoid DNS issues)
 ./run_e2e.sh -v
 
-# Esegui un singolo test
+# Run a single test
 ./run_e2e.sh -v -k test_availability_quorum_lost
 
 # Cleanup
@@ -237,26 +283,26 @@ docker compose -f docker/docker-compose.replicaset.yml down -v
 ### Fault Injection
 
 ```bash
-# Ferma un nodo
+# Stop a node
 ./tests/fault_injection.sh stop-node mongo2
 
-# Simula partizione di rete
+# Simulate network partition
 ./tests/fault_injection.sh network-partition mongo2
 
-# Ripristina
+# Restore
 ./tests/fault_injection.sh start-node mongo2
 ./tests/fault_injection.sh restore-network mongo2
 ```
 
-## Ambienti Docker per Test
+## Docker Test Environments
 
-| File | Topologia |
+| File | Topology |
 |---|---|
-| `docker/docker-compose.single.yml` | Single node |
-| `docker/docker-compose.replicaset.yml` | ReplicaSet 3 nodi |
-| `docker/docker-compose.replicaset-arbiter.yml` | ReplicaSet 2 data + 1 arbiter |
-| `docker/docker-compose.sharded.yml` | Sharded cluster completo |
+| `docker/docker-compose.single.yml` | Standalone node |
+| `docker/docker-compose.replicaset.yml` | 3-node ReplicaSet |
+| `docker/docker-compose.replicaset-arbiter.yml` | 2 data + 1 arbiter ReplicaSet |
+| `docker/docker-compose.sharded.yml` | Full sharded cluster |
 
-## Licenza
+## License
 
 MIT
