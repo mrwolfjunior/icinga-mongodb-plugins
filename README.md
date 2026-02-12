@@ -10,11 +10,11 @@ The plugin automatically detects the MongoDB topology and adapts its checks acco
 
 ```mermaid
 flowchart TD
-    A["Start: check_mongodb.py"] --> B["Parse CLI args\n(--uri, --availability, --metrics, --filesystem)"]
-    B --> C["Connect to MongoDB URI\n(with auth, TLS, timeout)"]
-    C --> D{"Topology Detection\n(hello / isMaster command)"}
+    A["Start: check_mongodb.py"] --> B["Parse CLI args<br>(--uri, --availability, --metrics, --filesystem)"]
+    B --> C["Connect to MongoDB URI<br>(with auth, TLS, timeout)"]
+    C --> D{"Topology Detection<br>(hello / isMaster command)"}
 
-    D -->|"msg = 'isdbgrid'"| E["🟣 Sharded Cluster\n(connected to mongos)"]
+    D -->|"msg = 'isdbgrid'"| E["🟣 Sharded Cluster<br>(connected to mongos)"]
     D -->|"setName present"| F["🔵 ReplicaSet"]
     D -->|"neither"| G["🟢 Standalone"]
 
@@ -28,19 +28,19 @@ flowchart TD
 
     I --> I1{"Topology?"}
     I1 -->|Standalone| I2["Ping node\n→ OK / CRITICAL"]
-    I1 -->|ReplicaSet| I3["For each node in URI:\n1. Direct connect (ping)\n2. Indirect check (replSetGetStatus)\n3. Compare direct vs indirect state\n4. Validate RS name\n5. Verify quorum (majority)"]
-    I1 -->|Sharded| I4["For each mongos: ping\nFor each shard RS:\n  replSetGetStatus → check members\nFor config RS: check members"]
+    I1 -->|ReplicaSet| I3["For each node in URI:<br>1. Direct connect (ping)<br>2. Indirect check (replSetGetStatus)<br>3. Compare direct vs indirect state<br>4. Validate RS name<br>5. Verify quorum (majority)"]
+    I1 -->|Sharded| I4["For each mongos: ping<br>For each shard RS:<br>  replSetGetStatus → check members<br>For config RS: check members"]
 
-    I3 --> I5{"Arbiter unreachable\nbut RS says healthy?"}
-    I5 -->|Yes| I6["OK — arbiter may be\non segregated network"]
+    I3 --> I5{"Arbiter unreachable<br>but RS says healthy?"}
+    I5 -->|Yes| I6["OK — arbiter may be<br>on segregated network"]
     I5 -->|No| I7["CRITICAL — node down"]
 
-    J --> J1["Connect to each node directly\nCollect serverStatus:\n• connections, opcounters\n• memory, network, WiredTiger\n• cursors, assertions, transactions\n• replication lag, oplog window"]
-    J1 --> J2["Apply --thresholds\n(above/below mode)"]
+    J --> J1["Connect to each node directly<br>Collect serverStatus:<br>• connections, opcounters<br>• memory, network, WiredTiger<br>• cursors, assertions, transactions<br>• replication lag, oplog window"]
+    J1 --> J2["Apply --thresholds<br>(above/below mode)"]
     J2 --> J3["Emit perfdata for Icinga"]
 
-    K --> K1["For each node: dbStats\n→ fsTotalSize, fsUsedSize\n→ usage %"]
-    K1 --> K2["Apply dynamic thresholds\n(logarithmic scaling for large volumes)"]
+    K --> K1["For each node: dbStats<br>→ fsTotalSize, fsUsedSize<br>→ usage %"]
+    K1 --> K2["Apply dynamic thresholds<br>(logarithmic scaling for large volumes)"]
 
     style E fill:#9b59b6,color:white
     style F fill:#3498db,color:white
