@@ -69,6 +69,11 @@ RS_STATES = {
 }
 
 
+def bytes_to_gb(value):
+    """Convert bytes to GB, rounded to 2 decimal places."""
+    return round(value / (1024 ** 3), 2)
+
+
 # ---------------------------------------------------------------------------
 # IcingaOutput — formats plugin output
 # ---------------------------------------------------------------------------
@@ -424,6 +429,8 @@ class AvailabilityChecker:
             except Exception as e:
                 direct_error = str(e)
 
+            safe_node = node_name.replace(".", "_").replace(":", "_")
+
             if direct_ok:
                 # Direct connection succeeded — verify consistency with indirect
                 if indirect_info:
@@ -433,6 +440,7 @@ class AvailabilityChecker:
                     if indirect_health == 1 and indirect_state in (1, 2, 7):
                         # Both direct and indirect say OK
                         nodes_ok += 1
+                        self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 1, "", "", "", "0", "1")
                         if self.verbose:
                             self.output.add_long_output(
                                 f"[OK] {node_name}: direct=OK, indirect={indirect_info['stateStr']}"
@@ -445,6 +453,7 @@ class AvailabilityChecker:
                             f"'{indirect_info['stateStr']}' — possible split-brain or recovery"
                         )
                         nodes_down += 1
+                        self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
                 else:
                     # Direct OK but not found in rsStatus — might be a misconfiguration
                     self.output.add_message(
@@ -453,6 +462,7 @@ class AvailabilityChecker:
                         f"possible wrong node or misconfigured URI"
                     )
                     nodes_down += 1
+                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
             else:
                 # Direct connection failed
                 if is_arbiter and indirect_info and indirect_info.get("health") == 1:
@@ -460,6 +470,7 @@ class AvailabilityChecker:
                     # (arbiter may be on a segregated network)
                     nodes_ok += 1
                     arbiter_issues.append(node_name)
+                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 1, "", "", "", "0", "1")
                     if self.verbose:
                         self.output.add_long_output(
                             f"[INFO] Arbiter {node_name}: not reachable directly but RS reports "
@@ -482,6 +493,7 @@ class AvailabilityChecker:
                             f"direct connection failed: {direct_error})"
                         )
                     nodes_down += 1
+                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
                 else:
                     self.output.add_message(
                         NAGIOS_CRITICAL,
@@ -489,6 +501,7 @@ class AvailabilityChecker:
                         f"(error: {direct_error})"
                     )
                     nodes_down += 1
+                    self.output.add_perfdata(f"rs_{rs_name}_{safe_node}_state", 0, "", "", "", "0", "1")
 
         # Summary
         if nodes_down > 0:
@@ -552,6 +565,7 @@ class AvailabilityChecker:
         mongos_down = 0
         for host, port in uri_hosts:
             node_name = f"{host}:{port}"
+            safe_mongos = node_name.replace(".", "_").replace(":", "_")
             try:
                 node_client = self.conn_manager.connect_to_node(host, port)
                 node_client.admin.command("ping")
@@ -563,13 +577,16 @@ class AvailabilityChecker:
                         f"Node {node_name}: expected mongos but got a different topology type"
                     )
                     mongos_down += 1
+                    self.output.add_perfdata(f"mongos_{safe_mongos}_state", 0, "", "", "", "0", "1")
                 else:
                     mongos_ok += 1
+                    self.output.add_perfdata(f"mongos_{safe_mongos}_state", 1, "", "", "", "0", "1")
                 node_client.close()
             except Exception as e:
                 self.output.add_message(NAGIOS_CRITICAL,
                                         f"mongos {node_name} unreachable: {e}")
                 mongos_down += 1
+                self.output.add_perfdata(f"mongos_{safe_mongos}_state", 0, "", "", "", "0", "1")
 
         if mongos_down == 0:
             self.output.add_message(NAGIOS_OK,
@@ -644,10 +661,13 @@ class AvailabilityChecker:
                     health = member.get("health", 0)
                     state_str = member.get("stateStr", "UNKNOWN")
 
-                    if health == 1 and state in (1, 2, 6):
+                    safe_member = member_name.replace(".", "_").replace(":", "_")
+                    if health == 1 and state in (1, 2, 7):
                         shard_ok += 1
+                        self.output.add_perfdata(f"shard_{shard_id}_{safe_member}_state", 1, "", "", "", "0", "1")
                     else:
                         shard_down += 1
+                        self.output.add_perfdata(f"shard_{shard_id}_{safe_member}_state", 0, "", "", "", "0", "1")
                         self.output.add_message(
                             NAGIOS_CRITICAL,
                             f"Shard '{shard_id}' member {member_name}: {state_str}"
@@ -705,10 +725,18 @@ class AvailabilityChecker:
                 if cfg_client:
                     try:
                         cfg_status = cfg_client.admin.command("replSetGetStatus")
-                        cfg_ok = sum(1 for m in cfg_status.get("members", [])
-                                     if m.get("health", 0) == 1 and m.get("state", -1) in (1, 2))
-                        cfg_total = len(cfg_status.get("members", []))
-                        cfg_down = cfg_total - cfg_ok
+                        cfg_ok = 0
+                        cfg_down = 0
+                        for m in cfg_status.get("members", []):
+                            m_name = m.get("name", "")
+                            safe_m = m_name.replace(".", "_").replace(":", "_")
+                            if m.get("health", 0) == 1 and m.get("state", -1) in (1, 2):
+                                cfg_ok += 1
+                                self.output.add_perfdata(f"config_{safe_m}_state", 1, "", "", "", "0", "1")
+                            else:
+                                cfg_down += 1
+                                self.output.add_perfdata(f"config_{safe_m}_state", 0, "", "", "", "0", "1")
+                        cfg_total = cfg_ok + cfg_down
 
                         if cfg_down > 0:
                             self.output.add_message(
@@ -920,12 +948,12 @@ class MetricsChecker:
             cache_written = cache.get("bytes written from cache", 0)
             cache_usage_pct = (cache_used / cache_max * 100) if cache_max > 0 else 0
 
-            self.output.add_perfdata(f"{safe_name}_wt_cache_max", cache_max, "B")
-            self.output.add_perfdata(f"{safe_name}_wt_cache_used", cache_used, "B")
-            self.output.add_perfdata(f"{safe_name}_wt_cache_dirty", cache_dirty, "B")
+            self.output.add_perfdata(f"{safe_name}_wt_cache_max", bytes_to_gb(cache_max), "GB")
+            self.output.add_perfdata(f"{safe_name}_wt_cache_used", bytes_to_gb(cache_used), "GB")
+            self.output.add_perfdata(f"{safe_name}_wt_cache_dirty", bytes_to_gb(cache_dirty), "GB")
             self.output.add_perfdata(f"{safe_name}_wt_cache_pct", f"{cache_usage_pct:.1f}", "%")
-            self.output.add_perfdata(f"{safe_name}_wt_cache_read", cache_read, "B")
-            self.output.add_perfdata(f"{safe_name}_wt_cache_written", cache_written, "B")
+            self.output.add_perfdata(f"{safe_name}_wt_cache_read", bytes_to_gb(cache_read), "GB")
+            self.output.add_perfdata(f"{safe_name}_wt_cache_written", bytes_to_gb(cache_written), "GB")
 
             # Cache eviction metrics
             evict_modified = cache.get("modified pages evicted", 0)
@@ -1002,8 +1030,8 @@ class MetricsChecker:
             oplog_stats = client.local.command("collStats", "oplog.rs")
             oplog_max = oplog_stats.get("maxSize", oplog_stats.get("size", 0))
             oplog_used = oplog_stats.get("storageSize", oplog_stats.get("size", 0))
-            self.output.add_perfdata(f"{safe_name}_oplog_max_size", oplog_max, "B")
-            self.output.add_perfdata(f"{safe_name}_oplog_used_size", oplog_used, "B")
+            self.output.add_perfdata(f"{safe_name}_oplog_max_size", bytes_to_gb(oplog_max), "GB")
+            self.output.add_perfdata(f"{safe_name}_oplog_used_size", bytes_to_gb(oplog_used), "GB")
         except Exception:
             pass
 
@@ -1014,8 +1042,8 @@ class MetricsChecker:
 
         # --- Network ---
         network = server_status.get("network", {})
-        self.output.add_perfdata(f"{safe_name}_net_bytes_in", network.get("bytesIn", 0), "B")
-        self.output.add_perfdata(f"{safe_name}_net_bytes_out", network.get("bytesOut", 0), "B")
+        self.output.add_perfdata(f"{safe_name}_net_in", bytes_to_gb(network.get("bytesIn", 0)), "GB")
+        self.output.add_perfdata(f"{safe_name}_net_out", bytes_to_gb(network.get("bytesOut", 0)), "GB")
         self.output.add_perfdata(f"{safe_name}_net_requests", network.get("numRequests", 0), "c")
 
         # --- Document Operations ---
@@ -1084,9 +1112,9 @@ class MetricsChecker:
                 except Exception:
                     pass
 
-            self.output.add_perfdata(f"{safe_name}_total_data_size", total_data_size, "B")
-            self.output.add_perfdata(f"{safe_name}_total_storage_size", total_storage_size, "B")
-            self.output.add_perfdata(f"{safe_name}_total_index_size", total_index_size, "B")
+            self.output.add_perfdata(f"{safe_name}_total_data_size", bytes_to_gb(total_data_size), "GB")
+            self.output.add_perfdata(f"{safe_name}_total_storage_size", bytes_to_gb(total_storage_size), "GB")
+            self.output.add_perfdata(f"{safe_name}_total_index_size", bytes_to_gb(total_index_size), "GB")
             self.output.add_perfdata(f"{safe_name}_total_collections", total_collections)
             self.output.add_perfdata(f"{safe_name}_total_objects", total_objects)
         except Exception as e:
@@ -1101,9 +1129,9 @@ class MetricsChecker:
             if fs_total > 0:
                 fs_free = fs_total - fs_used
                 fs_usage_pct = (fs_used / fs_total) * 100
-                self.output.add_perfdata(f"{safe_name}_fs_total", fs_total, "B")
-                self.output.add_perfdata(f"{safe_name}_fs_used", fs_used, "B")
-                self.output.add_perfdata(f"{safe_name}_fs_free", fs_free, "B")
+                self.output.add_perfdata(f"{safe_name}_fs_total", bytes_to_gb(fs_total), "GB")
+                self.output.add_perfdata(f"{safe_name}_fs_used", bytes_to_gb(fs_used), "GB")
+                self.output.add_perfdata(f"{safe_name}_fs_free", bytes_to_gb(fs_free), "GB")
                 self.output.add_perfdata(f"{safe_name}_fs_used_pct", f"{fs_usage_pct:.1f}", "%")
         except Exception:
             pass
@@ -1218,9 +1246,9 @@ class FilesystemChecker:
             f"{safe_name}_fs_used_pct", f"{usage_pct:.1f}", "%",
             f"{effective_warn:.1f}", f"{effective_crit:.1f}", "0", "100"
         )
-        self.output.add_perfdata(f"{safe_name}_fs_total", fs_total, "B")
-        self.output.add_perfdata(f"{safe_name}_fs_used", fs_used, "B")
-        self.output.add_perfdata(f"{safe_name}_fs_free", free_bytes, "B")
+        self.output.add_perfdata(f"{safe_name}_fs_total", bytes_to_gb(fs_total), "GB")
+        self.output.add_perfdata(f"{safe_name}_fs_used", bytes_to_gb(fs_used), "GB")
+        self.output.add_perfdata(f"{safe_name}_fs_free", bytes_to_gb(free_bytes), "GB")
 
         # Evaluate thresholds
         if usage_pct >= effective_crit:
