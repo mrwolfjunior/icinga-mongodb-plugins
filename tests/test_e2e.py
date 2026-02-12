@@ -293,6 +293,18 @@ class TestReplicaSet:
             time.sleep(15)
             wait_for_rs_stable(RS_URI)
 
+    def test_metrics_threshold_trigger(self):
+        """Verify that a threshold triggers CRITICAL (mode 'below')."""
+        # Set oplog_window critical to 100000h (impossible to have more than that usually)
+        # mode='below' -> alert if window <= 100000
+        thresholds = '{"oplog_window": {"warning": 200000, "critical": 100000, "mode": "below"}}'
+        code, out, _ = run_check("--uri", RS_URI, "--metrics", "--thresholds", thresholds, "--timeout", "10")
+        
+        # Expect CRITICAL because current window is likely small
+        assert code == CRITICAL
+        assert "oplog_window" in out.lower()
+        assert "critical" in out.lower()
+
 
 # =====================================================================
 # ReplicaSet with Arbiter Tests
