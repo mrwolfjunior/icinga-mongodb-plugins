@@ -12,7 +12,7 @@ services:
         aliases:
           - mongo-data1
     healthcheck:
-      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      test: [ "CMD", "mongo", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,7 +30,7 @@ services:
         aliases:
           - mongo-data2
     healthcheck:
-      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      test: [ "CMD", "mongo", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -48,7 +48,7 @@ services:
         aliases:
           - mongo-arbiter
     healthcheck:
-      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      test: [ "CMD", "mongo", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -67,7 +67,7 @@ services:
     command:
       - |
         echo "Initializing ReplicaSet with arbiter..."
-        mongosh --host mongo-data1:27017 --eval '
+        mongo --host mongo-data1:27017 --eval '
           rs.initiate({
             _id: "rsArbiter",
             members: [
@@ -79,7 +79,7 @@ services:
         '
         echo "Waiting for RS to stabilize..."
         sleep 15
-        mongosh --host mongo-data1:27017 --eval 'rs.status()'
+        mongo --host mongo-data1:27017 --eval 'rs.status()'
         echo "ReplicaSet with arbiter initialized."
     networks:
       - mongonet
