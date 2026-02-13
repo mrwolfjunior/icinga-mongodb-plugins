@@ -1,5 +1,13 @@
 # check_mongodb — Icinga Plugin for MongoDB
 
+![Version](https://img.shields.io/badge/version-25.02.13-blue)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![MongoDB](https://img.shields.io/badge/MongoDB-5.0_%7C_6.0_%7C_7.0_%7C_8.0-green)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)
+
+![Icinga MongoDB Plugin Banner](assets/banner.png)
+
 Monolithic Python plugin for monitoring on-prem MongoDB instances via Icinga/Nagios.
 
 Supports: **Standalone**, **ReplicaSet**, **ReplicaSet with Arbiter**, **Sharded Cluster**.
