@@ -1,0 +1,23 @@
+services:
+  mongo-single:
+    image: mongo:5.0
+    container_name: mongo-single
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-single-data:/data/db
+    command: mongod --bind_ip_all
+    networks:
+      - mongonet
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongo-single-data:
+
+networks:
+  mongonet:
+    driver: bridge

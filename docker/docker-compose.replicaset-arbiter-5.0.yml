@@ -1,0 +1,95 @@
+services:
+  mongo-data1:
+    image: mongo:5.0
+    container_name: mongo-data1
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data1-vol:/data/db
+    command: mongod --replSet rsArbiter --bind_ip_all --port 27017
+    networks:
+      mongonet:
+        aliases:
+          - mongo-data1
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo-data2:
+    image: mongo:5.0
+    container_name: mongo-data2
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data2-vol:/data/db
+    command: mongod --replSet rsArbiter --bind_ip_all --port 27017
+    networks:
+      mongonet:
+        aliases:
+          - mongo-data2
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo-arbiter:
+    image: mongo:5.0
+    container_name: mongo-arbiter
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo-arbiter-vol:/data/db
+    command: mongod --replSet rsArbiter --bind_ip_all --port 27017
+    networks:
+      mongonet:
+        aliases:
+          - mongo-arbiter
+    healthcheck:
+      test: [ "CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo-init:
+    image: mongo:5.0
+    container_name: mongo-arbiter-init
+    depends_on:
+      mongo-data1:
+        condition: service_healthy
+      mongo-data2:
+        condition: service_healthy
+      mongo-arbiter:
+        condition: service_healthy
+    entrypoint: [ "bash", "-c" ]
+    command:
+      - |
+        echo "Initializing ReplicaSet with arbiter..."
+        mongosh --host mongo-data1:27017 --eval '
+          rs.initiate({
+            _id: "rsArbiter",
+            members: [
+              { _id: 0, host: "mongo-data1:27017", priority: 2 },
+              { _id: 1, host: "mongo-data2:27017", priority: 1 },
+              { _id: 2, host: "mongo-arbiter:27017", arbiterOnly: true }
+            ]
+          });
+        '
+        echo "Waiting for RS to stabilize..."
+        sleep 15
+        mongosh --host mongo-data1:27017 --eval 'rs.status()'
+        echo "ReplicaSet with arbiter initialized."
+    networks:
+      - mongonet
+
+volumes:
+  mongo-data1-vol:
+  mongo-data2-vol:
+  mongo-arbiter-vol:
+
+
+networks:
+  mongonet:
+    driver: bridge

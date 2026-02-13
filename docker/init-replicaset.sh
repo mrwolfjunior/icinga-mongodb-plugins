@@ -4,7 +4,18 @@
 #   RS_NAME  — ReplicaSet name (e.g. "rs0")
 #   MEMBERS  — Comma-separated list of host:port (e.g. "mongo1:27017,mongo2:27017,mongo3:27017")
 
-set -e
+
+# Detect Shell
+if command -v mongosh &> /dev/null; then
+  MONGO_SHELL="mongosh"
+elif command -v mongo &> /dev/null; then
+  MONGO_SHELL="mongo"
+else
+  echo "Error: Neither 'mongosh' nor 'mongo' shell found."
+  exit 1
+fi
+
+echo "Using shell: $MONGO_SHELL"
 
 RS_NAME="${RS_NAME:-rs0}"
 MEMBERS="${MEMBERS:-mongo1:27017,mongo2:27017,mongo3:27017}"
@@ -31,7 +42,7 @@ echo "Connecting to ${FIRST_MEMBER}..."
 
 # Wait for the first member to be ready
 for i in $(seq 1 30); do
-    if mongosh --host "${FIRST_MEMBER}" --eval "db.adminCommand('ping')" &>/dev/null; then
+    if $MONGO_SHELL --host "${FIRST_MEMBER}" --eval "db.adminCommand('ping')" &>/dev/null; then
         echo "First member is ready."
         break
     fi
@@ -41,7 +52,7 @@ done
 
 # Initiate the ReplicaSet
 echo "Running rs.initiate()..."
-mongosh --host "${FIRST_MEMBER}" --eval "
+$MONGO_SHELL --host "${FIRST_MEMBER}" --eval "
   try {
     rs.initiate({
       _id: '${RS_NAME}',
@@ -59,7 +70,7 @@ mongosh --host "${FIRST_MEMBER}" --eval "
 # Wait for the RS to elect a primary
 echo "Waiting for primary election..."
 for i in $(seq 1 30); do
-    IS_PRIMARY=$(mongosh --host "${FIRST_MEMBER}" --quiet --eval "rs.isMaster().ismaster" 2>/dev/null || echo "false")
+    IS_PRIMARY=$($MONGO_SHELL --host "${FIRST_MEMBER}" --quiet --eval "rs.isMaster().ismaster" 2>/dev/null || echo "false")
     if [ "$IS_PRIMARY" = "true" ]; then
         echo "Primary elected successfully."
         break
@@ -69,4 +80,5 @@ for i in $(seq 1 30); do
 done
 
 echo "=== ReplicaSet '${RS_NAME}' initialized ==="
-mongosh --host "${FIRST_MEMBER}" --eval "rs.status()"
+$MONGO_SHELL --host "${FIRST_MEMBER}" --eval "rs.status()"
+
