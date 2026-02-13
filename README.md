@@ -12,52 +12,6 @@ Monolithic Python plugin for monitoring on-prem MongoDB instances via Icinga/Nag
 
 Supports: **Standalone**, **ReplicaSet**, **ReplicaSet with Arbiter**, **Sharded Cluster**.
 
-## How It Works
-
-The plugin automatically detects the MongoDB topology and adapts its checks accordingly.
-
-```mermaid
-flowchart TD
-    A["Start: check_mongodb.py"] --> B["Parse CLI args<br>(--uri, --availability, --metrics, --filesystem)"]
-    B --> C["Connect to MongoDB URI<br>(with auth, TLS, timeout)"]
-    C --> D{"Topology Detection<br>(hello / isMaster command)"}
-
-    D -->|"msg = 'isdbgrid'"| E["🟣 Sharded Cluster<br>(connected to mongos)"]
-    D -->|"setName present"| F["🔵 ReplicaSet"]
-    D -->|"neither"| G["🟢 Standalone"]
-
-    E --> H{"Check Mode?"}
-    F --> H
-    G --> H
-
-    H -->|--availability| I["Availability Check"]
-    H -->|--metrics| J["Metrics Check"]
-    H -->|--filesystem| K["Filesystem Check"]
-
-    I --> I1{"Topology?"}
-    I1 -->|Standalone| I2["Ping node\n→ OK / CRITICAL"]
-    I1 -->|ReplicaSet| I3["For each node in URI:<br>1. Direct connect (ping)<br>2. Indirect check (replSetGetStatus)<br>3. Compare direct vs indirect state<br>4. Validate RS name<br>5. Verify quorum (majority)"]
-    I1 -->|Sharded| I4["For each mongos: ping<br>For each shard RS:<br>  replSetGetStatus → check members<br>For config RS: check members"]
-
-    I3 --> I5{"Arbiter unreachable<br>but RS says healthy?"}
-    I5 -->|Yes| I6["OK — arbiter may be<br>on segregated network"]
-    I5 -->|No| I7["CRITICAL — node down"]
-
-    J --> J1["Connect to each node directly<br>Collect serverStatus:<br>• connections, opcounters<br>• memory, network, WiredTiger<br>• cursors, assertions, transactions<br>• replication lag, oplog window"]
-    J1 --> J2["Apply --thresholds<br>(above/below mode)"]
-    J2 --> J3["Emit perfdata for Icinga"]
-
-    K --> K1["For each node: dbStats<br>→ fsTotalSize, fsUsedSize<br>→ usage %"]
-    K1 --> K2["Apply dynamic thresholds<br>(logarithmic scaling for large volumes)"]
-
-    style E fill:#9b59b6,color:white
-    style F fill:#3498db,color:white
-    style G fill:#27ae60,color:white
-    style I2 fill:#27ae60,color:white
-    style I6 fill:#27ae60,color:white
-    style I7 fill:#e74c3c,color:white
-```
-
 ## Requirements
 
 | Requirement | Version |
@@ -78,6 +32,23 @@ For development and testing:
 ```bash
 pip install -r requirements-dev.txt
 ```
+
+## Parameters
+
+| Parameter | Description | Default |
+|---|---|---|
+| `--uri` | MongoDB connection string | **required** |
+| `--username`, `-u` | Authentication username | — |
+| `--password`, `-p` | Authentication password | — |
+| `--auth-mechanism` | `SCRAM-SHA-256`, `SCRAM-SHA-1`, `PLAIN` (LDAP) | auto |
+| `--auth-source` | Authentication database | `admin` (`$external` for LDAP) |
+| `--tls` | Enable TLS/SSL | `false` |
+| `--tls-insecure` | Disable TLS certificate verification | `false` |
+| `--timeout` | Connection timeout (seconds) | `10` |
+| `--thresholds` | JSON with per-metric thresholds (see above) | — |
+| `--replicaset` | Expected RS name (overrides URI) | — |
+| `--verbose`, `-v` | Verbose output for debugging | `false` |
+| `--version` | Show script version | — |
 
 ## Check Modes
 
@@ -158,42 +129,6 @@ Checks disk space via `dbStats` (`fsTotalSize` / `fsUsedSize`).
     --filesystem --thresholds '{"fs_usage_pct": {"warning": 85, "critical": 95}}'
 ```
 
-## Parameters
-
-| Parameter | Description | Default |
-|---|---|---|
-| `--uri` | MongoDB connection string | **required** |
-| `--username`, `-u` | Authentication username | — |
-| `--password`, `-p` | Authentication password | — |
-| `--auth-mechanism` | `SCRAM-SHA-256`, `SCRAM-SHA-1`, `PLAIN` (LDAP) | auto |
-| `--auth-source` | Authentication database | `admin` (`$external` for LDAP) |
-| `--tls` | Enable TLS/SSL | `false` |
-| `--tls-insecure` | Disable TLS certificate verification | `false` |
-| `--timeout` | Connection timeout (seconds) | `10` |
-| `--thresholds` | JSON with per-metric thresholds (see above) | — |
-| `--replicaset` | Expected RS name (overrides URI) | — |
-| `--verbose`, `-v` | Verbose output for debugging | `false` |
-| `--version` | Show script version | — |
-
-## Exit Codes
-
-| Code | Status | Description |
-|---|---|---|
-| 0 | OK | Everything is working correctly |
-| 1 | WARNING | Warning threshold exceeded |
-| 2 | CRITICAL | Node(s) down, critical threshold exceeded, severe error |
-| 3 | UNKNOWN | Plugin error or unsupported check |
-
-## Performance Data
-
-Output includes perfdata in standard Nagios format:
-
-```
-STATUS - message | label=value[UOM];warn;crit;min;max
-```
-
-Labels use the format `<host>_<port>_<metric>` to uniquely identify each metric per node.
-
 ## Icinga2 Configuration
 
 Example `CheckCommand`:
@@ -264,6 +199,71 @@ apply Service "mongodb-availability" {
 }
 ```
 
+## Performance Data
+
+Output includes perfdata in standard Nagios format:
+
+```
+STATUS - message | label=value[UOM];warn;crit;min;max
+```
+
+Labels use the format `<host>_<port>_<metric>` to uniquely identify each metric per node.
+
+## Exit Codes
+
+| Code | Status | Description |
+|---|---|---|
+| 0 | OK | Everything is working correctly |
+| 1 | WARNING | Warning threshold exceeded |
+| 2 | CRITICAL | Node(s) down, critical threshold exceeded, severe error |
+| 3 | UNKNOWN | Plugin error or unsupported check |
+
+## How It Works
+
+The plugin automatically detects the MongoDB topology and adapts its checks accordingly.
+
+```mermaid
+flowchart TD
+    A["Start: check_mongodb.py"] --> B["Parse CLI args<br>(--uri, --availability, --metrics, --filesystem)"]
+    B --> C["Connect to MongoDB URI<br>(with auth, TLS, timeout)"]
+    C --> D{"Topology Detection<br>(hello / isMaster command)"}
+
+    D -->|"msg = 'isdbgrid'"| E["🟣 Sharded Cluster<br>(connected to mongos)"]
+    D -->|"setName present"| F["🔵 ReplicaSet"]
+    D -->|"neither"| G["🟢 Standalone"]
+
+    E --> H{"Check Mode?"}
+    F --> H
+    G --> H
+
+    H -->|--availability| I["Availability Check"]
+    H -->|--metrics| J["Metrics Check"]
+    H -->|--filesystem| K["Filesystem Check"]
+
+    I --> I1{"Topology?"}
+    I1 -->|Standalone| I2["Ping node\n→ OK / CRITICAL"]
+    I1 -->|ReplicaSet| I3["For each node in URI:<br>1. Direct connect (ping)<br>2. Indirect check (replSetGetStatus)<br>3. Compare direct vs indirect state<br>4. Validate RS name<br>5. Verify quorum (majority)"]
+    I1 -->|Sharded| I4["For each mongos: ping<br>For each shard RS:<br>  replSetGetStatus → check members<br>For config RS: check members"]
+
+    I3 --> I5{"Arbiter unreachable<br>but RS says healthy?"}
+    I5 -->|Yes| I6["OK — arbiter may be<br>on segregated network"]
+    I5 -->|No| I7["CRITICAL — node down"]
+
+    J --> J1["Connect to each node directly<br>Collect serverStatus:<br>• connections, opcounters<br>• memory, network, WiredTiger<br>• cursors, assertions, transactions<br>• replication lag, oplog window"]
+    J1 --> J2["Apply --thresholds<br>(above/below mode)"]
+    J2 --> J3["Emit perfdata for Icinga"]
+
+    K --> K1["For each node: dbStats<br>→ fsTotalSize, fsUsedSize<br>→ usage %"]
+    K1 --> K2["Apply dynamic thresholds<br>(logarithmic scaling for large volumes)"]
+
+    style E fill:#9b59b6,color:white
+    style F fill:#3498db,color:white
+    style G fill:#27ae60,color:white
+    style I2 fill:#27ae60,color:white
+    style I6 fill:#27ae60,color:white
+    style I7 fill:#e74c3c,color:white
+```
+
 ## Testing
 
 ### Unit Tests
@@ -283,27 +283,49 @@ This script automates the process:
 3.  Installs dependencies.
 4.  Runs `pytest` inside the container.
 
-```bash
-# 1. Start test environment (choose one)
-docker compose -f docker/docker-compose.replicaset-7.0.yml up -d
-# or
-docker compose -f docker/docker-compose.sharded-5.0.yml up -d
+### Step-by-Step E2E Guide
 
-# 2. Wait for initialization (approx 30s)
-sleep 30
+1.  **Start Test Environment**: Choose the appropriate Docker Compose file for your target topology and version.
 
-# 3. Run tests using the helper script
-./run_e2e.sh -v
+    ```bash
+    # Example: ReplicaSet 7.0
+    docker compose -f docker/docker-compose.replicaset-7.0.yml up -d
+    ```
 
-# Run a single test
-./run_e2e.sh -v -k test_availability_quorum_lost
+2.  **Wait for Initialization**: Give the cluster some time to elect a primary and stabilize. [30 seconds recommended]
 
-# Cleanup
-# Cleanup
-docker compose -f docker/docker-compose.replicaset-7.0.yml down -v
-```
+    ```bash
+    sleep 30
+    ```
+
+3.  **Run Tests**: Execute the helper script.
+
+    ```bash
+    ./run_e2e.sh -v
+    ```
+
+4.  **Cleanup**: Tear down the environment.
+
+    ```bash
+    docker compose -f docker/docker-compose.replicaset-7.0.yml down -v
+    ```
+
+### Docker Test Environments
+
+| File | Topology |
+|---|---|
+| `docker/docker-compose.single-7.0.yml` | Standalone MongoDB 7.0 |
+| `docker/docker-compose.replicaset-7.0.yml` | 3-node ReplicaSet MongoDB 7.0 |
+| `docker/docker-compose.replicaset-arbiter-7.0.yml` | 2 data + 1 arbiter MongoDB 7.0 |
+| `docker/docker-compose.sharded-7.0.yml` | Full sharded cluster MongoDB 7.0 |
+| `docker/docker-compose.single-5.0.yml` | Standalone MongoDB 5.0 |
+| `docker/docker-compose.replicaset-5.0.yml` | 3-node ReplicaSet MongoDB 5.0 |
+| `docker/docker-compose.replicaset-arbiter-5.0.yml` | 2 data + 1 arbiter MongoDB 5.0 |
+| `docker/docker-compose.sharded-5.0.yml` | Full sharded cluster MongoDB 5.0 |
 
 ### Fault Injection
+
+Use the included script to simulate failures during E2E testing:
 
 ```bash
 # Stop a node
@@ -316,19 +338,6 @@ docker compose -f docker/docker-compose.replicaset-7.0.yml down -v
 ./tests/fault_injection.sh start-node mongo2
 ./tests/fault_injection.sh restore-network mongo2
 ```
-
-## Docker Test Environments
-
-| File | Topology |
-|---|---|
-| `docker/docker-compose.single-7.0.yml` | Standalone MongoDB 7.0 |
-| `docker/docker-compose.replicaset-7.0.yml` | 3-node ReplicaSet MongoDB 7.0 |
-| `docker/docker-compose.replicaset-arbiter-7.0.yml` | 2 data + 1 arbiter MongoDB 7.0 |
-| `docker/docker-compose.sharded-7.0.yml` | Full sharded cluster MongoDB 7.0 |
-| `docker/docker-compose.single-5.0.yml` | Standalone MongoDB 5.0 |
-| `docker/docker-compose.replicaset-5.0.yml` | 3-node ReplicaSet MongoDB 5.0 |
-| `docker/docker-compose.replicaset-arbiter-5.0.yml` | 2 data + 1 arbiter MongoDB 5.0 |
-| `docker/docker-compose.sharded-5.0.yml` | Full sharded cluster MongoDB 5.0 |
 
 ## License
 
