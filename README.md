@@ -165,6 +165,7 @@ Checks disk space via `dbStats` (`fsTotalSize` / `fsUsedSize`).
 | `--thresholds` | JSON with per-metric thresholds (see above) | — |
 | `--replicaset` | Expected RS name (overrides URI) | — |
 | `--verbose`, `-v` | Verbose output for debugging | `false` |
+| `--version` | Show script version | — |
 
 ## Exit Codes
 
@@ -265,19 +266,33 @@ python -m pytest tests/test_check_mongodb.py -v
 
 ### End-to-End Tests (requires Docker)
 
+The E2E tests run inside a temporary Docker container attached to the `docker_mongonet` network. This ensures the test runner can resolve the MongoDB hostnames (`mongo1`, `mongos1`, etc.) defined in the Compose files.
+
+**Helper Script (`run_e2e.sh`)**:
+This script automates the process:
+1.  Builds/pulls a lightweight Python image.
+2.  Mounts the current directory.
+3.  Installs dependencies.
+4.  Runs `pytest` inside the container.
+
 ```bash
-# Start test environment
-docker compose -f docker/docker-compose.replicaset.yml up -d
+# 1. Start test environment (choose one)
+docker compose -f docker/docker-compose.replicaset-7.0.yml up -d
+# or
+docker compose -f docker/docker-compose.sharded-5.0.yml up -d
+
+# 2. Wait for initialization (approx 30s)
 sleep 30
 
-# Run tests (recommended method to avoid DNS issues)
+# 3. Run tests using the helper script
 ./run_e2e.sh -v
 
 # Run a single test
 ./run_e2e.sh -v -k test_availability_quorum_lost
 
 # Cleanup
-docker compose -f docker/docker-compose.replicaset.yml down -v
+# Cleanup
+docker compose -f docker/docker-compose.replicaset-7.0.yml down -v
 ```
 
 ### Fault Injection
@@ -298,10 +313,14 @@ docker compose -f docker/docker-compose.replicaset.yml down -v
 
 | File | Topology |
 |---|---|
-| `docker/docker-compose.single.yml` | Standalone node |
-| `docker/docker-compose.replicaset.yml` | 3-node ReplicaSet |
-| `docker/docker-compose.replicaset-arbiter.yml` | 2 data + 1 arbiter ReplicaSet |
-| `docker/docker-compose.sharded.yml` | Full sharded cluster |
+| `docker/docker-compose.single-7.0.yml` | Standalone MongoDB 7.0 |
+| `docker/docker-compose.replicaset-7.0.yml` | 3-node ReplicaSet MongoDB 7.0 |
+| `docker/docker-compose.replicaset-arbiter-7.0.yml` | 2 data + 1 arbiter MongoDB 7.0 |
+| `docker/docker-compose.sharded-7.0.yml` | Full sharded cluster MongoDB 7.0 |
+| `docker/docker-compose.single-5.0.yml` | Standalone MongoDB 5.0 |
+| `docker/docker-compose.replicaset-5.0.yml` | 3-node ReplicaSet MongoDB 5.0 |
+| `docker/docker-compose.replicaset-arbiter-5.0.yml` | 2 data + 1 arbiter MongoDB 5.0 |
+| `docker/docker-compose.sharded-5.0.yml` | Full sharded cluster MongoDB 5.0 |
 
 ## License
 
